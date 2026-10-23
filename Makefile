@@ -16,7 +16,7 @@ help:
 	  'Targets:' \
 	  '  install    Install $(PROG) to $(BINDIR)' \
 	  '  uninstall  Remove $(PROG) from $(BINDIR)' \
-	  '  check      Run the smoke tests' \
+	  '  check      Run the unit and smoke tests' \
 	  '  help       Show this message' \
 	  '' \
 	  'Variables:' \
@@ -32,4 +32,5 @@ uninstall:
 	rm -f "$(DESTDIR)$(BINDIR)/$(PROG)"
 
 check:
+	./tests/unit.sh
 	./tests/smoke.sh

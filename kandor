@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# kandor - run OpenCode inside a bubblewrap sandbox.
+# kandor - run OpenCode, Pi or oh-my-pi (omp) inside a bubblewrap sandbox.
 #
 # The sandbox is intentionally conservative:
 #   * the host filesystem is mounted read-only at /
 #   * your home directory is replaced by an empty tmpfs
-#   * only the project, OpenCode's own state directories, and explicitly
+#   * only the project, the agent's own state directories, and explicitly
 #     requested paths are writable
 #   * /tmp, /var/tmp, /run, /run/user/$UID, /mnt, /media and /srv are private
 #   * the process gets its own PID/IPC/UTS/user/cgroup namespaces
@@ -15,47 +15,66 @@
 # cannot connect to a background OpenCode service running outside the
 # sandbox.  The host's service credentials are never mounted; isolated
 # profiles write their own service.json with a private port, and --shared
-# uses temporary config/state/cache copies.
+# uses temporary config/state/cache copies (Pi and omp are the exception:
+# their --shared mode mounts the host's ~/.pi/agent and ~/.omp read-write).
+#
+# Pi and omp keep their entire state in one directory (~/.pi/agent and
+# ~/.omp).  Isolated profiles mount a sandbox-only copy of those trees, so
+# stored provider credentials and host sessions stay outside the sandbox.
+# Shared mode (the default) mounts the host trees read-write, so config
+# changes and logins persist.
 #
 # Requires: Linux, bubblewrap >= 0.5 (0.9+ recommended), Bash 4.3+.
 #
 set -euo pipefail
 
 readonly PROG="${0##*/}"
-readonly VERSION="0.1.0"
+readonly VERSION="0.2.0"
 readonly SANDBOX_HOSTNAME="kandor"
 
 log()  { printf '%s: %s\n' "$PROG" "$*" >&2; }
 warn() { printf '%s: warning: %s\n' "$PROG" "$*" >&2; }
 die()  { printf '%s: error: %s\n' "$PROG" "$*" >&2; exit 1; }
 
+# Map user-facing agent names to the internal identifiers.
+normalize_agent() {
+  case $1 in
+    opencode|oc)          printf '%s\n' opencode ;;
+    pi)                   printf '%s\n' pi ;;
+    omp|oh-my-pi|ohmypi)  printf '%s\n' omp ;;
+    *)                    return 1 ;;
+  esac
+}
+
 usage() {
   cat <<'EOF'
-Run OpenCode inside a bubblewrap sandbox.
+Run OpenCode, Pi or oh-my-pi inside a bubblewrap sandbox.
 
 Usage:
-  kandor [options] [--] [opencode arguments...]
+  kandor [options] [--] [agent arguments...]
 
 The current directory (or --dir) is the only project directory mounted
-read-write.  Your home directory is hidden.  By default OpenCode runs with
-a sandbox-only profile under ~/.local/share/kandor/<profile>; the host
-OpenCode config is copied in once so plugins and settings keep working.
-Use --shared to share the host's session database instead (less isolated:
-host session history becomes readable inside the sandbox; config, state and
-cache use temporary copies).
+read-write.  Your home directory is hidden.  By default the agent shares
+the host's agent state (OpenCode: the host session database; Pi and omp:
+the whole ~/.pi/agent and ~/.omp trees, including stored credentials).
+Use --isolated (or --profile) for a sandbox-only profile
+under ~/.local/share/kandor/<profile>: the host config is copied in once so
+plugins and settings keep working, but host sessions and stored credentials
+are not exposed.
 
 Options:
+  --agent NAME            Agent to run: opencode (default), pi, or omp
   -C, --dir DIR           Project directory (default: current directory)
       --ro PATH           Mount PATH read-only (repeatable)
       --rw PATH           Mount PATH read-write (repeatable)
       --env NAME[=VALUE]  Pass an environment variable into the sandbox
                           (repeatable).  Without =VALUE, the host value is used.
-      --isolated          Use a sandbox-only OpenCode profile (default)
-      --shared            Share the host's OpenCode session database; config,
-                          state and cache use a temporary copy
-      --profile NAME      Profile name for the isolated profile (default: "default")
-      --no-seed           Do not copy the host OpenCode config into a new
-                          isolated profile
+      --isolated          Use a sandbox-only profile instead of host state
+      --shared            Share the host's agent state (default)
+      --profile NAME      Isolated profile name (implies --isolated;
+                          default: "default")
+      --no-seed           Do not copy the host config into a new isolated
+                          profile
       --net               Share the host network (default; needed for LLM APIs)
       --no-net            Run without network access (--unshare-net)
       --ssh               Mount ~/.ssh read-only
@@ -70,26 +89,39 @@ Options:
                           protection; may prevent TUI resize).  Default: on
                           only when the kernel permits TIOCSTI.
       --no-new-session    Keep the controlling terminal (enables TUI resize)
-      --shell             Run a shell inside the sandbox instead of OpenCode
+      --shell             Run a shell inside the sandbox instead of the agent
+      --init-config       Create a commented config file at the standard path
+                          (or $KANDOR_CONFIG) and exit; never overwrites
+      --set-agent NAME    Save NAME as the default agent in the config file
+                          (creates it if needed) and exit
       --dry-run           Print the bwrap command and exit (environment
                           secrets are redacted; arguments are printed as-is)
       --verbose           Print sandbox details
   -h, --help              Show this help
   -V, --version           Show the wrapper version
 
-Everything after "--" is passed to OpenCode verbatim.  Unknown options are
-also passed to OpenCode, so these are equivalent:
+Everything after "--" is passed to the agent verbatim.  Unknown options are
+also passed to the agent, so these are equivalent:
   kandor --continue
   kandor -- --continue
+
+Only opencode treats a positional directory as the project.  For pi and omp
+use -C/--dir (or their own --cwd) and pass prompts after "--".
 
 Examples:
   kandor
   kandor -C ~/code/my-project
   kandor run "fix the failing tests"
-  kandor auth login            # log in once per isolated profile
-  kandor --shared              # use the host's OpenCode sessions
+  kandor -C ~/code/proj --isolated --profile work
+  kandor auth login            # OpenCode: stored in the host data directory
+  kandor --agent omp -- login  # omp: stored in the host ~/.omp
+  kandor --agent omp -C ~/code/my-project
+  kandor --agent pi -C ~/code/my-project -- "fix the failing tests"
+  kandor --agent pi --isolated # Pi: /login inside the isolated profile
   kandor --no-net --shell
   kandor --ro ~/.config/gcloud --rw ~/go -- run "build it"
+  kandor --init-config --agent omp   # create a config defaulting to omp
+  kandor --set-agent pi              # switch the saved default to pi
   kandor --dry-run
 
 Configuration file:
@@ -103,6 +135,7 @@ Configuration file:
       isolated
       shared
       no-seed
+      agent NAME
       profile NAME
       ssh
       ssh-agent
@@ -114,7 +147,9 @@ Configuration file:
       new-session
       no-new-session
   Lines beginning with # are ignored.  Command-line options are applied
-  after the file and take precedence.
+  after the file and take precedence.  For the agent, the order is:
+  --agent, then KANDOR_AGENT, then the config file's agent directive,
+  then opencode.
 EOF
 }
 
@@ -123,7 +158,10 @@ EOF
 # ---------------------------------------------------------------------------
 
 project_dir=$PWD
-isolated=1
+agent=opencode
+# Shared host state is the default.  --isolated (or --profile) opts into a
+# sandbox-only profile.
+isolated=0
 seed_config=1
 profile=default
 shared_tmp=
@@ -145,12 +183,19 @@ allow_git_credentials=0
 allow_netrc=0
 allow_npmrc=0
 shell_mode=0
+init_config=0
+set_agent=
 dry_run=0
 verbose=0
+show_help=0
+show_version=0
 extra_ro=()
 extra_rw=()
 extra_env=()
 oc_args=()
+
+# Mount destinations already planned by add_mount(); repeats are skipped.
+declare -A mounted=()
 
 # ---------------------------------------------------------------------------
 # Small helpers
@@ -264,6 +309,7 @@ load_config() {
       isolated)         isolated=1 ;;
       shared)           isolated=0 ;;
       no-seed)          seed_config=0 ;;
+      agent)            agent=$rest ;;
       profile)          profile=$rest; isolated=1 ;;
       ssh)              allow_ssh=1 ;;
       ssh-agent)        allow_ssh_agent=1 ;;
@@ -280,341 +326,95 @@ load_config() {
   done < "$file"
 }
 
-# ---------------------------------------------------------------------------
-# Command line
-# ---------------------------------------------------------------------------
+config_template() {
+  local agent=$1
+  cat <<EOF
+# kandor configuration file
+#
+# One directive per line.  Lines beginning with '#' are ignored.  Run
+# 'kandor --help' for the full list; command-line options override this file.
 
-# Load the configuration file before command-line parsing so that command
-# line options can override it.
-if [[ -n ${HOME:-} ]]; then
-  default_config=${XDG_CONFIG_HOME:-$HOME/.config}/kandor/config
-else
-  default_config=/nonexistent
-fi
-load_config "${KANDOR_CONFIG:-$default_config}"
+# Default agent: opencode, pi, or omp.
+agent $agent
 
-while (($#)); do
-  case $1 in
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    -V|--version)
-      printf '%s %s\n' "$PROG" "$VERSION"
-      exit 0
-      ;;
-    -C|--dir|--project)
-      (($# >= 2)) || die "$1 requires a directory argument"
-      project_dir=$2
-      shift 2
-      ;;
-    --ro)
-      (($# >= 2)) || die "--ro requires a path"
-      extra_ro+=("$(expand_path "$2")")
-      shift 2
-      ;;
-    --rw)
-      (($# >= 2)) || die "--rw requires a path"
-      extra_rw+=("$(expand_path "$2")")
-      shift 2
-      ;;
-    --env)
-      (($# >= 2)) || die "--env requires NAME or NAME=VALUE"
-      extra_env+=("$2")
-      shift 2
-      ;;
-    --isolated)
-      isolated=1
-      shift
-      ;;
-    --shared)
-      isolated=0
-      shift
-      ;;
-    --no-seed)
-      seed_config=0
-      shift
-      ;;
-    --profile)
-      (($# >= 2)) || die "--profile requires a name"
-      profile=$2
-      isolated=1
-      shift 2
-      ;;
-    --net)
-      network=1
-      shift
-      ;;
-    --no-net)
-      network=0
-      shift
-      ;;
-    --ssh)
-      allow_ssh=1
-      shift
-      ;;
-    --ssh-agent)
-      allow_ssh_agent=1
-      shift
-      ;;
-    --git-credentials)
-      allow_git_credentials=1
-      shift
-      ;;
-    --netrc)
-      allow_netrc=1
-      shift
-      ;;
-    --npmrc)
-      allow_npmrc=1
-      shift
-      ;;
-    --no-gitconfig)
-      allow_gitconfig=0
-      shift
-      ;;
-    --allow-userns)
-      allow_userns=1
-      shift
-      ;;
-    --new-session)
-      new_session=1
-      new_session_explicit=1
-      shift
-      ;;
-    --no-new-session)
-      new_session=0
-      new_session_explicit=1
-      shift
-      ;;
-    --shell)
-      shell_mode=1
-      shift
-      ;;
-    --dry-run|--print-command)
-      dry_run=1
-      shift
-      ;;
-    --verbose)
-      verbose=1
-      shift
-      ;;
-    --)
-      shift
-      oc_args+=("$@")
-      break
-      ;;
-    -*)
-      # Not one of our options: hand it (and everything after it) to
-      # OpenCode.  This keeps top-level flags such as --continue working.
-      oc_args+=("$@")
-      break
-      ;;
-    *)
-      # OpenCode's top-level positional argument is a directory.  Treat an
-      # existing directory as the project, unless it is a subcommand name.
-      case $1 in
-        run|auth|mcp|plugin|debug|session|api|serve|acp|mini|models|stats|\
-        pair|reload|service|upgrade|update|uninstall|completions)
-          oc_args+=("$@")
-          break
-          ;;
-      esac
-      if [[ -d $1 ]]; then
-        project_dir=$1
-        shift
-        continue
-      fi
-      oc_args+=("$@")
-      break
-      ;;
-  esac
-done
+# Extra mounts
+# ro ~/.config/gcloud
+# rw ~/go
+# rw ~/.cache/go-build
 
-# --standalone is a per-command flag in OpenCode, not a global flag before a
-# subcommand.  Drop a leading one and re-insert it in the right place below.
-if [[ ${oc_args[0]:-} == --standalone ]]; then
-  oc_args=("${oc_args[@]:1}")
-fi
+# Environment
+# env GOPROXY=https://proxy.golang.org,direct
+
+# Defaults
+# isolated
+# profile work
+# no-seed
+# no-net
+# ssh
+# ssh-agent
+# git-credentials
+# netrc
+# npmrc
+# no-gitconfig
+# allow-userns
+# no-new-session
+EOF
+}
+
+# Write a new config file.  Refuse to overwrite an existing file so a typo in
+# KANDOR_CONFIG cannot destroy the user's settings.
+write_default_config() {
+  local file=$1 agent=$2 dir
+  [[ -e $file ]] && die "configuration file already exists: $file"
+  dir=${file%/*}
+  [[ $dir == "$file" ]] && dir=.
+  mkdir -p -- "$dir" || die "cannot create configuration directory: $dir"
+  chmod 700 -- "$dir" 2>/dev/null || true
+  ( umask 077; config_template "$agent" > "$file" ) ||
+    die "cannot write configuration file: $file"
+  chmod 600 -- "$file" 2>/dev/null || true
+}
+
+# Add or replace the agent directive, preserving every other line.  This also
+# works when the file was created by hand and has no agent directive yet.
+persist_agent() {
+  local file=$1 agent=$2 dir tmp
+  if [[ ! -e $file ]]; then
+    write_default_config "$file" "$agent"
+    return 0
+  fi
+
+  dir=${file%/*}
+  [[ $dir == "$file" ]] && dir=.
+  tmp=$(mktemp "$dir/.kandor-config.XXXXXX") ||
+    die "cannot create a temporary file in $dir"
+  if ! awk -v directive="agent $agent" '
+      BEGIN { done = 0 }
+      /^[[:space:]]*#/ { print; next }
+      /^[[:space:]]*agent([[:space:]]|$)/ {
+        if (!done) { print directive; done = 1 }
+        next
+      }
+      { print }
+      END { if (!done) print directive }
+    ' "$file" > "$tmp"; then
+    rm -f -- "$tmp"
+    die "cannot update configuration file: $file"
+  fi
+  chmod 600 -- "$tmp" 2>/dev/null || true
+  mv -f -- "$tmp" "$file" || {
+    rm -f -- "$tmp"
+    die "cannot replace configuration file: $file"
+  }
+}
 
 # ---------------------------------------------------------------------------
-# Validation and paths
+# Mount planning
 # ---------------------------------------------------------------------------
-
-[[ -n ${HOME:-} ]] || die "HOME is not set"
-[[ -d ${HOME:-} ]] || die "HOME is not a directory: $HOME"
-HOME=$(resolve_path "$HOME") || die "cannot resolve HOME: $HOME"
-[[ $HOME != / ]] || die "refusing to run with HOME=/"
-
-[[ $profile =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] ||
-  die "invalid profile name '$profile' (use letters, digits, '.', '_' and '-')"
-
-project_dir=$(resolve_path "$project_dir") ||
-  die "project directory does not exist: $project_dir"
-[[ -d $project_dir ]] || die "not a directory: $project_dir"
-[[ $project_dir != / ]] || die "refusing to use / as the project directory"
-[[ $project_dir != "$HOME" ]] ||
-  die "refusing to use HOME as the project directory; run from a project subdirectory"
-[[ $HOME != "$project_dir"/* ]] ||
-  die "the project directory may not be an ancestor of HOME"
-
-command -v bwrap >/dev/null 2>&1 ||
-  die "bubblewrap (bwrap) is not installed"
-
-BWRAP_HELP=$(bwrap --help 2>&1 || true)
-[[ -n $BWRAP_HELP ]] || die "bwrap does not appear to work"
 
 have_bwrap_opt() {
   grep -q -- "$1" <<< "$BWRAP_HELP"
 }
-
-# A quick preflight so the user gets a useful error instead of a cryptic
-# bwrap failure after all the mounts have been prepared.
-if have_bwrap_opt --unshare-user-try; then
-  probe_userns=(--unshare-user-try)
-else
-  probe_userns=(--unshare-user)
-fi
-if ! bwrap --ro-bind / / "${probe_userns[@]}" -- /bin/true >/dev/null 2>&1; then
-  cat >&2 <<EOF
-$PROG: error: bubblewrap cannot create a user namespace.
-
-This is usually one of:
-  * unprivileged user namespaces are disabled
-      sudo sysctl -w kernel.unprivileged_userns_clone=1
-  * AppArmor restricts unprivileged user namespaces (Ubuntu 23.10+)
-      see /etc/apparmor.d/unprivileged_userns
-  * bwrap is running inside a container that blocks namespace creation
-  * bwrap needs to be installed setuid root (check your distribution's
-    bubblewrap package)
-
-Run 'bwrap --ro-bind / / --unshare-user-try -- /bin/true' to reproduce.
-EOF
-  exit 1
-fi
-
-if (( shell_mode )); then
-  shell_bin=${SHELL:-/bin/bash}
-  [[ -x $shell_bin ]] || shell_bin=/bin/bash
-  [[ -x $shell_bin ]] || die "no usable shell found (tried \$SHELL and /bin/bash)"
-  shell_bin=$(resolve_path "$shell_bin") || shell_bin=/bin/bash
-  oc_bin=
-else
-  oc_bin=${KANDOR_BIN:-}
-  if [[ -z $oc_bin ]]; then
-    oc_bin=$(type -P opencode || true)
-  fi
-  [[ -n $oc_bin ]] ||
-    die "opencode was not found in PATH (set KANDOR_BIN to override)"
-  oc_bin=$(resolve_path "$oc_bin") || die "cannot resolve the opencode binary"
-  [[ -x $oc_bin ]] || die "opencode is not executable: $oc_bin"
-fi
-
-xdg_config=$(resolve_path_maybe "${XDG_CONFIG_HOME:-$HOME/.config}")
-xdg_data=$(resolve_path_maybe "${XDG_DATA_HOME:-$HOME/.local/share}")
-xdg_state=$(resolve_path_maybe "${XDG_STATE_HOME:-$HOME/.local/state}")
-xdg_cache=$(resolve_path_maybe "${XDG_CACHE_HOME:-$HOME/.cache}")
-
-if (( isolated )); then
-  sandbox_home=$(resolve_path_maybe "${KANDOR_HOME:-$xdg_data/kandor}")
-  profile_root=$sandbox_home/$profile
-  sandbox_xdg_config=$profile_root/config
-  sandbox_xdg_data=$profile_root/data
-  sandbox_xdg_state=$profile_root/state
-  sandbox_xdg_cache=$profile_root/cache
-  mkdir -p -- "$sandbox_xdg_config" "$sandbox_xdg_data" \
-              "$sandbox_xdg_state" "$sandbox_xdg_cache" ||
-    die "cannot create the isolated profile at $profile_root"
-  chmod 700 -- "$profile_root" 2>/dev/null || true
-else
-  # --shared shares the host session database but uses private copies of
-  # config, state and cache.  This keeps the host service password and the
-  # host's service registration out of the sandbox while still allowing
-  # OpenCode to write its own service.json.
-  # Remove stale copies from runs that were killed before their EXIT trap,
-  # but leave directories whose owning process is still alive.
-  while IFS= read -r -d '' stale; do
-    stale_pid=$(cat "$stale/pid" 2>/dev/null || true)
-    if [[ -n $stale_pid ]] && kill -0 "$stale_pid" 2>/dev/null; then
-      continue
-    fi
-    rm -rf -- "$stale" 2>/dev/null || true
-  done < <(find "${TMPDIR:-/tmp}" -maxdepth 1 -type d \
-             -name "kandor-shared-$(id -u).*" -mmin +60 -print0 2>/dev/null)
-
-  shared_tmp=$(mktemp -d "${TMPDIR:-/tmp}/kandor-shared-$(id -u).XXXXXX") ||
-    die "cannot create a temporary shared profile"
-  printf '%s\n' "$$" > "$shared_tmp/pid"
-  trap 'rm -rf -- "$shared_tmp"' EXIT
-  trap 'exit 129' HUP
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
-  sandbox_xdg_config=$shared_tmp/config
-  sandbox_xdg_state=$shared_tmp/state
-  sandbox_xdg_cache=$shared_tmp/cache
-  sandbox_xdg_data=$xdg_data
-  mkdir -p -- "$sandbox_xdg_config/opencode" "$sandbox_xdg_state/opencode" \
-              "$sandbox_xdg_cache/opencode" ||
-    die "cannot create the temporary shared profile"
-  shopt -s nullglob
-  for f in "$xdg_config/opencode"/*; do
-    base=${f##*/}
-    [[ $base == service.json ]] && continue
-    cp -aL -- "$f" "$sandbox_xdg_config/opencode/" 2>/dev/null ||
-      warn "could not copy $f into the shared sandbox profile"
-  done
-  shopt -u nullglob
-fi
-
-config_dir=$sandbox_xdg_config/opencode
-data_dir=$sandbox_xdg_data/opencode
-state_dir=$sandbox_xdg_state/opencode
-cache_dir=$sandbox_xdg_cache/opencode
-
-mkdir -p -- "$config_dir" "$data_dir" "$state_dir" "$cache_dir" ||
-  die "cannot create OpenCode's config/data/state/cache directories"
-
-if (( isolated && seed_config )); then
-  # Copy the host config into a brand-new profile once.  This keeps plugins
-  # and settings working without exposing the host's session database.
-  if [[ ! -e $config_dir/.kandor-seeded ]]; then
-    shopt -s nullglob
-    for f in "$xdg_config/opencode"/*; do
-      base=${f##*/}
-      [[ $base == service.json ]] && continue
-      cp -aL -- "$f" "$config_dir/" 2>/dev/null ||
-        warn "could not copy $f into the sandbox profile"
-    done
-    shopt -u nullglob
-    : > "$config_dir/.kandor-seeded" 2>/dev/null || true
-  fi
-elif (( ! isolated )); then
-  warn "--shared shares the host OpenCode session database; config, state and cache use temporary copies"
-fi
-
-if (( new_session && ! new_session_explicit )); then
-  warn "TIOCSTI is enabled on this kernel; using --new-session for safety"
-  warn "terminal resizing may not work; pass --no-new-session to disable it"
-fi
-
-uid=$(id -u)
-service_port=$(find_free_port 2>/dev/null || true)
-runtime_dir=${XDG_RUNTIME_DIR:-/run/user/$uid}
-runtime_dir=$(resolve_path_maybe "$runtime_dir")
-if [[ ! -d $runtime_dir ]]; then
-  runtime_dir=/tmp/kandor-runtime
-fi
-
-# ---------------------------------------------------------------------------
-# Build the bubblewrap command
-# ---------------------------------------------------------------------------
-
-BWRAP=(bwrap)
-BWRAP+=(--ro-bind / /)
-BWRAP+=(--dev /dev)
-BWRAP+=(--proc /proc)
-
-declare -A mounted=()
 
 add_mount() {
   local kind=$1 src=$2 dest=${3:-$2}
@@ -667,61 +467,12 @@ add_ro_symlink_targets() {
   done < <(find -P "$dir" -type l -print0 2>/dev/null)
 }
 
-# Hide the home directory.  bwrap resolves mount sources before applying
-# mounts, so binding paths below HOME after this still works.
-home_parent=
-case $HOME in
-  /home/*)    home_parent=/home ;;
-  /root)      home_parent=/root ;;
-  /tmp/*)     home_parent=/tmp ;;
-  /var/tmp/*) home_parent=/var/tmp ;;
-  /mnt/*)     home_parent=/mnt ;;
-  /media/*)   home_parent=/media ;;
-  /srv/*)     home_parent=/srv ;;
-  *)          home_parent=$HOME ;;
-esac
-case $home_parent in
-  /tmp|/var/tmp) add_tmpfs "$home_parent" 1777 ;;
-  *)             add_tmpfs "$home_parent" ;;
-esac
-BWRAP+=(--dir "$HOME")
-
 # Private scratch space.  Do not hide a directory that contains HOME.
 hide_scratch() {
   local dest=$1 mode=${2:-}
   [[ $HOME == "$dest" || $HOME == "$dest"/* ]] && return 0
   add_tmpfs "$dest" "$mode"
 }
-hide_scratch /root
-hide_scratch /tmp 1777
-hide_scratch /var/tmp 1777
-hide_scratch /mnt
-hide_scratch /media
-hide_scratch /srv
-
-# Hide host runtime sockets (system DBus, journal, keyrings, systemd user
-# services, ...) but keep the resolver configuration that /etc/resolv.conf
-# points at, otherwise DNS stops working on systemd-resolved systems.
-add_tmpfs /run
-# In the unusual case that HOME lives under /run, recreate it after the
-# tmpfs mount.  Harmless otherwise.
-BWRAP+=(--dir "$HOME")
-resolv_target=$(resolve_path /etc/resolv.conf 2>/dev/null || true)
-case $resolv_target in
-  /run/*)
-    # Recreate only the resolver file, not the rest of /run/systemd (which
-    # contains journal, varlink and other host sockets).
-    add_private_dir "$(dirname "$resolv_target")"
-    add_ro "$resolv_target"
-    ;;
-esac
-
-# A private runtime directory (DBus, keyrings and SSH agent sockets from the
-# host are not visible there unless explicitly requested below).
-add_private_dir "$runtime_dir" 0700
-
-# The project itself.
-add_rw "$project_dir"
 
 # A worktree's .git file points at a per-worktree directory inside the main
 # repository's .git directory.  Verify that back-reference before exposing
@@ -775,138 +526,6 @@ git_probe() {
   ( unset GIT_DIR GIT_WORK_TREE; git -C "$project_dir" "$@" )
 }
 
-if command -v git >/dev/null 2>&1 &&
-   git_probe rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  git_common=$(git_probe rev-parse --path-format=absolute \
-                 --git-common-dir 2>/dev/null || true)
-  if [[ -z $git_common ]]; then
-    # Older Git versions do not support --path-format.
-    git_common=$(git_probe rev-parse --git-common-dir 2>/dev/null || true)
-    [[ -n $git_common && $git_common != /* ]] && git_common=$project_dir/$git_common
-  fi
-  if [[ -n $git_common && -e $git_common ]]; then
-    git_common=$(resolve_path "$git_common") || git_common=
-    case $git_common in
-      ''|"$project_dir"|"$project_dir"/*) ;;
-      *)
-        if git_common_allowed "$git_common"; then
-          add_rw "$git_common"
-        else
-          warn "refusing to mount an untrusted git directory outside the project: $git_common"
-          warn "git operations may fail; use --rw '$git_common' if you trust this repository"
-        fi
-        ;;
-    esac
-  fi
-fi
-
-# OpenCode's persistent state.
-add_rw "$config_dir"
-add_rw "$data_dir"
-add_rw "$state_dir"
-add_rw "$cache_dir"
-if (( ! isolated )) && [[ -d $xdg_cache/opencode/bin ]]; then
-  # Reuse the host's cached ripgrep binary without exposing the host cache
-  # (and its npm packages) read-write.
-  add_ro "$xdg_cache/opencode/bin" "$cache_dir/bin"
-  add_ro_symlink_targets "$xdg_cache/opencode/bin"
-fi
-
-# The OpenCode (or debug shell) binary and the runtime/user tool directories.
-if (( shell_mode )); then
-  add_ro "$(dirname "$shell_bin")"
-else
-  add_ro "$(dirname "$oc_bin")"
-fi
-[[ -d $HOME/.bun ]] && add_ro "$HOME/.bun"
-for d in "$HOME/.local/bin" "$HOME/bin" "$HOME/.opencode/bin" \
-         "$HOME/go/bin" "$HOME/.cargo/bin"; do
-  if [[ -d $d ]]; then
-    add_ro "$d"
-    add_ro_symlink_targets "$d"
-  fi
-done
-
-# Git configuration.  Without it, commits inside the sandbox have no author.
-if (( allow_gitconfig )); then
-  [[ -f $HOME/.gitconfig ]] && add_ro "$HOME/.gitconfig"
-  [[ -f $HOME/.gitignore_global ]] && add_ro "$HOME/.gitignore_global"
-  if [[ -n ${GIT_CONFIG_GLOBAL:-} && -e ${GIT_CONFIG_GLOBAL} ]]; then
-    if p=$(resolve_path "$GIT_CONFIG_GLOBAL" 2>/dev/null); then
-      add_ro "$p"
-      # Prepend so an explicit --env GIT_CONFIG_GLOBAL on the command line
-      # can still override it.
-      extra_env=("GIT_CONFIG_GLOBAL=$p" "${extra_env[@]}")
-    fi
-  elif [[ -d $xdg_config/git ]]; then
-    # Keep the host path: Git also follows symlinks inside this directory,
-    # and those targets live at their original host paths.
-    add_ro "$xdg_config/git"
-    add_ro_symlink_targets "$xdg_config/git"
-    if [[ -f $xdg_config/git/config ]]; then
-      extra_env=("GIT_CONFIG_GLOBAL=$xdg_config/git/config" "${extra_env[@]}")
-    fi
-  fi
-fi
-
-# Opt-in credential mounts.
-if (( allow_ssh )); then
-  if [[ -d $HOME/.ssh ]]; then
-    add_ro "$HOME/.ssh"
-    add_ro_symlink_targets "$HOME/.ssh"
-  else
-    warn "--ssh was requested but $HOME/.ssh does not exist"
-  fi
-fi
-if (( allow_ssh_agent )); then
-  if [[ -n ${SSH_AUTH_SOCK:-} && -S ${SSH_AUTH_SOCK:-} ]] &&
-     p=$(resolve_path "$SSH_AUTH_SOCK" 2>/dev/null); then
-    add_ro "$p"
-  else
-    warn "--ssh-agent was requested but SSH_AUTH_SOCK is not a socket"
-    allow_ssh_agent=0
-  fi
-fi
-if (( allow_git_credentials )); then
-  if [[ -f $HOME/.git-credentials ]]; then
-    add_ro "$HOME/.git-credentials"
-  else
-    warn "--git-credentials was requested but $HOME/.git-credentials does not exist"
-  fi
-fi
-if (( allow_netrc )); then
-  if [[ -f $HOME/.netrc ]]; then
-    add_ro "$HOME/.netrc"
-  else
-    warn "--netrc was requested but $HOME/.netrc does not exist"
-  fi
-fi
-if (( allow_npmrc )); then
-  if [[ -f $HOME/.npmrc ]]; then
-    add_ro "$HOME/.npmrc"
-  else
-    warn "--npmrc was requested but $HOME/.npmrc does not exist"
-  fi
-fi
-
-# Credential and CA files referenced by forwarded environment variables.
-for var in GOOGLE_APPLICATION_CREDENTIALS NODE_EXTRA_CA_CERTS SSL_CERT_FILE \
-           CURL_CA_BUNDLE REQUESTS_CA_BUNDLE AWS_SHARED_CREDENTIALS_FILE \
-           AWS_CONFIG_FILE AWS_CA_BUNDLE GIT_SSL_CAINFO GIT_SSL_CAPATH; do
-  val=${!var:-}
-  [[ -n $val ]] || continue
-  if [[ -e $val ]] && p=$(resolve_path "$val" 2>/dev/null); then
-    add_ro "$p"
-  else
-    warn "$var points to a path that does not exist: $val"
-  fi
-done
-if [[ -n ${SSL_CERT_DIR:-} && -d ${SSL_CERT_DIR} ]] &&
-   p=$(resolve_path "$SSL_CERT_DIR" 2>/dev/null); then
-  add_ro "$p"
-fi
-
-# Explicit extra mounts.
 add_extra_mount() {
   local mode=$1 p=$2
   [[ -n $p ]] || return 0
@@ -929,315 +548,1100 @@ add_extra_mount() {
     BWRAP+=(--bind "$p" "$p")
   fi
 }
-for p in "${extra_ro[@]}"; do add_extra_mount ro "$p"; done
-for p in "${extra_rw[@]}"; do add_extra_mount rw "$p"; done
 
-# Service credentials.  Both profile modes use a writable, private config and
-# state directory, so OpenCode can create and update its own service.json.
-# A free port prevents a sandbox service from colliding with the host service.
-if [[ -n $service_port ]]; then
-  service_content=$(printf '{"port": %s}' "$service_port")
-else
-  service_content='{}'
-  warn "could not find a free TCP port for OpenCode's private service"
-fi
-
-rm -f -- "$config_dir/service.json" "$state_dir/service.json" 2>/dev/null || true
-if ! { printf '%s\n' "$service_content" > "$config_dir/service.json"; } 2>/dev/null; then
-  warn "could not write $config_dir/service.json"
-fi
-if ! { printf '{}\n' > "$state_dir/service.json"; } 2>/dev/null; then
-  warn "could not write $state_dir/service.json"
-fi
-chmod 600 "$config_dir/service.json" "$state_dir/service.json" 2>/dev/null || true
-
-# ---------------------------------------------------------------------------
-# Namespaces and security options
-# ---------------------------------------------------------------------------
-
-if have_bwrap_opt --unshare-user-try; then
-  userns_opt=(--unshare-user-try)
-else
-  userns_opt=(--unshare-user)
-fi
-
-if (( allow_userns )); then
-  BWRAP+=("${userns_opt[@]}")
-elif have_bwrap_opt --disable-userns &&
-     bwrap --ro-bind / / --unshare-user --disable-userns -- /bin/true \
-       >/dev/null 2>&1; then
-  BWRAP+=(--unshare-user --disable-userns)
-else
-  BWRAP+=("${userns_opt[@]}")
-  (( verbose )) && warn "nested user namespaces cannot be disabled on this system"
-fi
-
-BWRAP+=(--unshare-pid)
-BWRAP+=(--unshare-ipc)
-BWRAP+=(--unshare-uts)
-have_bwrap_opt --unshare-cgroup-try && BWRAP+=(--unshare-cgroup-try)
-(( network )) || BWRAP+=(--unshare-net)
-
-BWRAP+=(--hostname "$SANDBOX_HOSTNAME")
-if (( new_session )) && have_bwrap_opt --new-session; then
-  BWRAP+=(--new-session)
-fi
-have_bwrap_opt --die-with-parent && BWRAP+=(--die-with-parent)
-have_bwrap_opt --cap-drop && BWRAP+=(--cap-drop ALL)
-
-BWRAP+=(--chdir "$project_dir")
-
-# ---------------------------------------------------------------------------
-# Environment
-# ---------------------------------------------------------------------------
-
-BWRAP+=(--clearenv)
 setenv() { BWRAP+=(--setenv "$1" "$2"); }
 
-sandbox_path=${PATH:-/usr/local/bin:/usr/bin:/bin}
-case ":$sandbox_path:" in
-  *:/usr/bin:*) ;;
-  *) sandbox_path=/usr/bin:/bin:$sandbox_path ;;
-esac
-
-setenv HOME "$HOME"
-setenv USER "${USER:-$(id -un)}"
-setenv LOGNAME "${LOGNAME:-${USER:-$(id -un)}}"
-setenv SHELL "${SHELL:-/bin/bash}"
-setenv PATH "$sandbox_path"
-setenv HOSTNAME "$SANDBOX_HOSTNAME"
-setenv TERM "${TERM:-xterm-256color}"
-setenv TMPDIR /tmp
-setenv XDG_CONFIG_HOME "$sandbox_xdg_config"
-setenv XDG_DATA_HOME "$sandbox_xdg_data"
-setenv XDG_STATE_HOME "$sandbox_xdg_state"
-setenv XDG_CACHE_HOME "$sandbox_xdg_cache"
-setenv XDG_RUNTIME_DIR "$runtime_dir"
-setenv LANG "${LANG:-C.UTF-8}"
-setenv OPENCODE_DISABLE_AUTOUPDATE 1
-
-[[ -n ${COLORTERM:-} ]] && setenv COLORTERM "$COLORTERM"
-[[ -n ${NO_COLOR:-} ]] && setenv NO_COLOR "$NO_COLOR"
-[[ -n ${FORCE_COLOR:-} ]] && setenv FORCE_COLOR "$FORCE_COLOR"
-[[ -n ${CLICOLOR:-} ]] && setenv CLICOLOR "$CLICOLOR"
-[[ -n ${CLICOLOR_FORCE:-} ]] && setenv CLICOLOR_FORCE "$CLICOLOR_FORCE"
-[[ -n ${TZ:-} ]] && setenv TZ "$TZ"
-[[ -n ${EDITOR:-} ]] && setenv EDITOR "$EDITOR"
-[[ -n ${VISUAL:-} ]] && setenv VISUAL "$VISUAL"
-(( allow_ssh_agent )) && setenv SSH_AUTH_SOCK "$(resolve_path "$SSH_AUTH_SOCK")"
-
-# Forward provider credentials, proxy settings and CA configuration.  The
-# list is deliberately narrow: arbitrary host variables (and especially the
-# host's OPENCODE_* service/session variables) are not inherited.
-while IFS= read -r name; do
-  [[ -n $name ]] || continue
-  case $name in
-    HOME|USER|LOGNAME|SHELL|PATH|TERM|COLORTERM|NO_COLOR|FORCE_COLOR|CLICOLOR|CLICOLOR_FORCE|\
-    TMPDIR|TZ|LANG|LANGUAGE|LC_*|XDG_*|HOSTNAME|PWD|OLDPWD|SHLVL|_|\
-    EDITOR|VISUAL)
-      continue
-      ;;
-    OPENCODE|OPENCODE_SESSION_ID|OPENCODE_CLIENT|OPENCODE_TERMINAL|\
-    OPENCODE_PASSWORD|OPENCODE_SERVER_PASSWORD|OPENCODE_DB|OPENCODE_CONFIG|\
-    OPENCODE_CONFIG_DIR|OPENCODE_CONFIG_CONTENT|AI_AGENT|SSH_AUTH_SOCK|\
-    DBUS_SESSION_BUS_ADDRESS|DISPLAY|WAYLAND_DISPLAY|XAUTHORITY)
-      continue
-      ;;
-  esac
-  case $name in
-    *_API_KEY|*_API_KEY_*|*_API_BASE|*_API_BASE_*|*_BASE_URL|*_AUTH_TOKEN|\
-    *_ACCESS_TOKEN|*_SECRET_KEY|*_SECRET_ACCESS_KEY|*_API_TOKEN|*_ACCESS_KEY|\
-    *_SESSION_TOKEN)
-      setenv "$name" "${!name}"
-      ;;
-    OPENAI_*|ANTHROPIC_*|OPENROUTER_*|GEMINI_*|GOOGLE_*|VERTEX_*|AWS_*|\
-    AZURE_*|DEEPSEEK_*|XAI_*|GROQ_*|MISTRAL_*|COHERE_*|PERPLEXITY_*|\
-    TOGETHER_*|FIREWORKS_*|CEREBRAS_*|OLLAMA_*|LMSTUDIO_*|LM_STUDIO_*|\
-    HF_*|HUGGING_FACE_*|REPLICATE_*)
-      setenv "$name" "${!name}"
-      ;;
-    HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|http_proxy|https_proxy|all_proxy|no_proxy)
-      setenv "$name" "${!name}"
-      ;;
-    SSL_CERT_FILE|SSL_CERT_DIR|NODE_EXTRA_CA_CERTS|CURL_CA_BUNDLE|\
-    REQUESTS_CA_BUNDLE|GIT_SSL_CAINFO|GIT_SSL_CAPATH|AWS_CA_BUNDLE)
-      setenv "$name" "${!name}"
-      ;;
-    EDITOR|VISUAL|GIT_EDITOR)
-      setenv "$name" "${!name}"
-      ;;
-    LANG|LANGUAGE|LC_*|TZ)
-      setenv "$name" "${!name}"
-      ;;
-    TERM_PROGRAM|TERM_PROGRAM_VERSION)
-      setenv "$name" "${!name}"
-      ;;
-    *)
-      continue
-      ;;
-  esac
-done < <(compgen -e)
-
-for spec in "${extra_env[@]}"; do
-  [[ -n $spec ]] || continue
-  if [[ $spec == *=* ]]; then
-    name=${spec%%=*}
-    value=${spec#*=}
-  else
-    name=$spec
-    if [[ ! -v $name ]]; then
-      warn "environment variable $name is not set; skipping"
-      continue
-    fi
-    value=${!name}
-  fi
-  [[ $name =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] ||
-    die "invalid environment variable name: $name"
-  setenv "$name" "$value"
-done
-
 # ---------------------------------------------------------------------------
-# OpenCode command line
+# Command line
 # ---------------------------------------------------------------------------
 
-if (( shell_mode )); then
-  cmd=("$shell_bin" -l)
-  ((${#oc_args[@]})) && cmd+=("${oc_args[@]}")
-else
-  # Refuse commands that would talk to the host's background service or
-  # manage the host installation.
-  first_arg=
-  for arg in "${oc_args[@]}"; do
-    [[ $arg == -* ]] && continue
-    first_arg=$arg
-    break
-  done
-  case $first_arg in
-    service)
-      die "refusing to run 'opencode service' inside the sandbox; use --standalone commands instead"
-      ;;
-    uninstall|upgrade|update)
-      die "refusing to run 'opencode $first_arg' inside the sandbox"
-      ;;
-    pair)
-      die "refusing to run 'opencode pair' inside the sandbox (it connects to the host service)"
-      ;;
-  esac
-  for arg in "${oc_args[@]}"; do
-    case $arg in
-      --server|--server=*|--service)
-        die "refusing '$arg' inside the sandbox; the sandbox always uses a private server"
-        ;;
-    esac
-  done
-  if [[ $first_arg == acp ]]; then
-    for arg in "${oc_args[@]}"; do
-      [[ $arg == --login ]] &&
-        die "use 'kandor auth login' instead of 'acp --login' inside the sandbox"
-    done
-  fi
+# Parse the command line into the global option variables.  Validation and
+# path resolution happen in main() afterwards, so --help and --version can
+# short-circuit before any filesystem work.
+parse_args() {
+  local args i arg
 
-  has_standalone=0
-  has_help=0
-  has_version=0
-  for arg in "${oc_args[@]}"; do
-    # Options after "--" are positional arguments (for example a prompt that
-    # happens to be named "--help"), not flags.
+  # The configuration file is loaded before this function runs.  An explicit
+  # environment value overrides it; --agent on the command line wins last.
+  [[ -n ${KANDOR_AGENT:-} ]] && agent=$KANDOR_AGENT
+
+  # The agent decides how positional arguments are interpreted during the main
+  # parse (early exit), so it must be resolved before that loop starts.
+  # --help and --version also stop the prescan: everything after them is
+  # ignored, including a later --agent.
+  args=("$@")
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    arg=${args[$i]}
     [[ $arg == -- ]] && break
     case $arg in
-      --standalone) has_standalone=1 ;;
-      --help|-h)    has_help=1 ;;
-      --version)    has_version=1 ;;
+      -h|--help|-V|--version) break ;;
+      --agent)
+        ((i + 1 < ${#args[@]})) && agent=${args[$((i + 1))]}
+        ;;
+      --agent=*)
+        agent=${arg#*=}
+        ;;
     esac
   done
+  agent=$(normalize_agent "$agent") ||
+    die "unknown agent '$agent' (use opencode, pi or omp)"
 
-  if ((${#oc_args[@]} == 0)); then
-    cmd=("$oc_bin" --standalone)
-  elif (( has_standalone )); then
-    cmd=("$oc_bin" "${oc_args[@]}")
-  elif (( has_help || has_version )); then
-    cmd=("$oc_bin" "${oc_args[@]}")
-  else
-    sub=${oc_args[0]}
-    case $sub in
-      completions|debug|mcp|plugin|serve|acp)
-        # These commands either do not use a server or start their own.
-        cmd=("$oc_bin" "${oc_args[@]}")
+  while (($#)); do
+    case $1 in
+      -h|--help)
+        show_help=1
+        return 0
         ;;
-      auth|session)
-        # Nested subcommand, e.g. "auth list" or "session export".
-        path=("$sub")
-        for ((i = 1; i < ${#oc_args[@]}; i++)); do
-          arg=${oc_args[$i]}
-          [[ $arg == -* ]] && continue
-          path+=("$arg")
-          break
-        done
-        if ((${#path[@]} > 1)); then
-          cmd=("$oc_bin" "${path[@]}" --standalone \
-               "${oc_args[@]:${#path[@]}}")
-        else
-          # Bare "auth" or "session" prints help; no server is involved.
-          cmd=("$oc_bin" "${oc_args[@]}")
+      -V|--version)
+        show_version=1
+        return 0
+        ;;
+      --agent)
+        (($# >= 2)) || die "--agent requires a name"
+        agent=$(normalize_agent "$2") ||
+          die "unknown agent '$2' (use opencode, pi or omp)"
+        shift 2
+        ;;
+      --agent=*)
+        agent=$(normalize_agent "${1#*=}") ||
+          die "unknown agent '${1#*=}' (use opencode, pi or omp)"
+        shift
+        ;;
+      -C|--dir|--project)
+        (($# >= 2)) || die "$1 requires a directory argument"
+        project_dir=$2
+        shift 2
+        ;;
+      --ro)
+        (($# >= 2)) || die "--ro requires a path"
+        extra_ro+=("$(expand_path "$2")")
+        shift 2
+        ;;
+      --rw)
+        (($# >= 2)) || die "--rw requires a path"
+        extra_rw+=("$(expand_path "$2")")
+        shift 2
+        ;;
+      --env)
+        (($# >= 2)) || die "--env requires NAME or NAME=VALUE"
+        extra_env+=("$2")
+        shift 2
+        ;;
+      --isolated)
+        isolated=1
+        shift
+        ;;
+      --shared)
+        isolated=0
+        shift
+        ;;
+      --no-seed)
+        seed_config=0
+        shift
+        ;;
+      --profile)
+        (($# >= 2)) || die "--profile requires a name"
+        profile=$2
+        isolated=1
+        shift 2
+        ;;
+      --net)
+        network=1
+        shift
+        ;;
+      --no-net)
+        network=0
+        shift
+        ;;
+      --ssh)
+        allow_ssh=1
+        shift
+        ;;
+      --ssh-agent)
+        allow_ssh_agent=1
+        shift
+        ;;
+      --git-credentials)
+        allow_git_credentials=1
+        shift
+        ;;
+      --netrc)
+        allow_netrc=1
+        shift
+        ;;
+      --npmrc)
+        allow_npmrc=1
+        shift
+        ;;
+      --no-gitconfig)
+        allow_gitconfig=0
+        shift
+        ;;
+      --allow-userns)
+        allow_userns=1
+        shift
+        ;;
+      --new-session)
+        new_session=1
+        new_session_explicit=1
+        shift
+        ;;
+      --no-new-session)
+        new_session=0
+        new_session_explicit=1
+        shift
+        ;;
+      --shell)
+        shell_mode=1
+        shift
+        ;;
+      --init-config)
+        init_config=1
+        shift
+        ;;
+      --set-agent|--set-default-agent)
+        (($# >= 2)) || die "$1 requires an agent name"
+        set_agent=$(normalize_agent "$2") ||
+          die "unknown agent '$2' (use opencode, pi or omp)"
+        shift 2
+        ;;
+      --set-agent=*|--set-default-agent=*)
+        set_agent=$(normalize_agent "${1#*=}") ||
+          die "unknown agent '${1#*=}' (use opencode, pi or omp)"
+        shift
+        ;;
+      --dry-run|--print-command)
+        dry_run=1
+        shift
+        ;;
+      --verbose)
+        verbose=1
+        shift
+        ;;
+      --)
+        shift
+        oc_args+=("$@")
+        break
+        ;;
+      -*)
+        # Not one of our options: hand it (and everything after it) to the
+        # agent.  This keeps top-level flags such as --continue working.
+        oc_args+=("$@")
+        break
+        ;;
+      *)
+        if [[ $agent == opencode ]]; then
+          # OpenCode's top-level positional argument is a directory.  Treat an
+          # existing directory as the project, unless it is a subcommand name.
+          # Pi and omp take prompts and files positionally, so only opencode
+          # gets this convenience.
+          case $1 in
+            run|auth|mcp|plugin|debug|session|api|serve|acp|mini|models|stats|\
+            pair|reload|service|upgrade|update|uninstall|completions)
+              oc_args+=("$@")
+              break
+              ;;
+          esac
+          if [[ -d $1 ]]; then
+            project_dir=$1
+            shift
+            continue
+          fi
         fi
-        ;;
-      run|api|models|stats|mini|reload)
-        # These commands accept --standalone and use a server.  Insert it
-        # after the subcommand rather than relying on help-text formatting.
-        cmd=("$oc_bin" "$sub" --standalone "${oc_args[@]:1}")
-        ;;
-      -*|*)
-        # No subcommand: the TUI.  --standalone is a top-level flag here.
-        cmd=("$oc_bin" --standalone "${oc_args[@]}")
+        oc_args+=("$@")
+        break
         ;;
     esac
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Build the bubblewrap command
+# ---------------------------------------------------------------------------
+
+build_mounts() {
+  BWRAP=(bwrap)
+  BWRAP+=(--ro-bind / /)
+  BWRAP+=(--dev /dev)
+  BWRAP+=(--proc /proc)
+  mounted=()
+
+  # Hide the home directory.  bwrap resolves mount sources before applying
+  # mounts, so binding paths below HOME after this still works.
+  home_parent=
+  case $HOME in
+    /home/*)    home_parent=/home ;;
+    /root)      home_parent=/root ;;
+    /tmp/*)     home_parent=/tmp ;;
+    /var/tmp/*) home_parent=/var/tmp ;;
+    /mnt/*)     home_parent=/mnt ;;
+    /media/*)   home_parent=/media ;;
+    /srv/*)     home_parent=/srv ;;
+    *)          home_parent=$HOME ;;
+  esac
+  case $home_parent in
+    /tmp|/var/tmp) add_tmpfs "$home_parent" 1777 ;;
+    *)             add_tmpfs "$home_parent" ;;
+  esac
+  BWRAP+=(--dir "$HOME")
+
+  hide_scratch /root
+  hide_scratch /tmp 1777
+  hide_scratch /var/tmp 1777
+  hide_scratch /mnt
+  hide_scratch /media
+  hide_scratch /srv
+
+  # Hide host runtime sockets (system DBus, journal, keyrings, systemd user
+  # services, ...) but keep the resolver configuration that /etc/resolv.conf
+  # points at, otherwise DNS stops working on systemd-resolved systems.
+  add_tmpfs /run
+  # In the unusual case that HOME lives under /run, recreate it after the
+  # tmpfs mount.  Harmless otherwise.
+  BWRAP+=(--dir "$HOME")
+  resolv_target=$(resolve_path /etc/resolv.conf 2>/dev/null || true)
+  case $resolv_target in
+    /run/*)
+      # Recreate only the resolver file, not the rest of /run/systemd (which
+      # contains journal, varlink and other host sockets).
+      add_private_dir "$(dirname "$resolv_target")"
+      add_ro "$resolv_target"
+      ;;
+  esac
+
+  # A private runtime directory (DBus, keyrings and SSH agent sockets from the
+  # host are not visible there unless explicitly requested below).
+  add_private_dir "$runtime_dir" 0700
+
+  # The project itself.
+  add_rw "$project_dir"
+
+  # A worktree's .git file points at a per-worktree directory inside the main
+  # repository's .git directory.  is_valid_worktree_common() verifies that
+  # back-reference before the common directory is exposed.
+  if command -v git >/dev/null 2>&1 &&
+     git_probe rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git_common=$(git_probe rev-parse --path-format=absolute \
+                   --git-common-dir 2>/dev/null || true)
+    if [[ -z $git_common ]]; then
+      # Older Git versions do not support --path-format.
+      git_common=$(git_probe rev-parse --git-common-dir 2>/dev/null || true)
+      [[ -n $git_common && $git_common != /* ]] && git_common=$project_dir/$git_common
+    fi
+    if [[ -n $git_common && -e $git_common ]]; then
+      git_common=$(resolve_path "$git_common") || git_common=
+      case $git_common in
+        ''|"$project_dir"|"$project_dir"/*) ;;
+        *)
+          if git_common_allowed "$git_common"; then
+            add_rw "$git_common"
+          else
+            warn "refusing to mount an untrusted git directory outside the project: $git_common"
+            warn "git operations may fail; use --rw '$git_common' if you trust this repository"
+          fi
+          ;;
+      esac
+    fi
   fi
-fi
+
+  # The agent's persistent state.
+  case $agent in
+    opencode)
+      add_rw "$config_dir"
+      add_rw "$data_dir"
+      add_rw "$state_dir"
+      add_rw "$cache_dir"
+      if (( ! isolated )) && [[ -d $xdg_cache/opencode/bin ]]; then
+        # Reuse the host's cached ripgrep binary without exposing the host cache
+        # (and its npm packages) read-write.
+        add_ro "$xdg_cache/opencode/bin" "$cache_dir/bin"
+        add_ro_symlink_targets "$xdg_cache/opencode/bin"
+      fi
+      ;;
+    pi)
+      # Isolated profiles bind a sandbox-only agent directory; shared mode
+      # binds the host tree read-write so config edits and logins persist.
+      if [[ -d $pi_agent_dir ]]; then
+        add_rw "$pi_agent_dir" "$HOME/.pi/agent"
+      else
+        die "Pi agent directory does not exist: $pi_agent_dir"
+      fi
+      ;;
+    omp)
+      # Isolated profiles bind the profile tree; --shared binds the host tree.
+      add_rw "$omp_root" "$HOME/.omp"
+      ;;
+  esac
+
+  # The agent (or debug shell) binary and the runtime/user tool directories.
+  if (( shell_mode )); then
+    add_ro "$(dirname "$shell_bin")"
+  else
+    add_ro "$(dirname "$oc_bin")"
+  fi
+  [[ -d $HOME/.bun ]] && add_ro "$HOME/.bun"
+  for d in "$HOME/.local/bin" "$HOME/bin" "$HOME/.opencode/bin" \
+           "$HOME/go/bin" "$HOME/.cargo/bin"; do
+    if [[ -d $d ]]; then
+      add_ro "$d"
+      add_ro_symlink_targets "$d"
+    fi
+  done
+
+  # Git configuration.  Without it, commits inside the sandbox have no author.
+  if (( allow_gitconfig )); then
+    [[ -f $HOME/.gitconfig ]] && add_ro "$HOME/.gitconfig"
+    [[ -f $HOME/.gitignore_global ]] && add_ro "$HOME/.gitignore_global"
+    if [[ -n ${GIT_CONFIG_GLOBAL:-} && -e ${GIT_CONFIG_GLOBAL} ]]; then
+      if p=$(resolve_path "$GIT_CONFIG_GLOBAL" 2>/dev/null); then
+        add_ro "$p"
+        # Prepend so an explicit --env GIT_CONFIG_GLOBAL on the command line
+        # can still override it.
+        extra_env=("GIT_CONFIG_GLOBAL=$p" "${extra_env[@]}")
+      fi
+    elif [[ -d $xdg_config/git ]]; then
+      # Keep the host path: Git also follows symlinks inside this directory,
+      # and those targets live at their original host paths.
+      add_ro "$xdg_config/git"
+      add_ro_symlink_targets "$xdg_config/git"
+      if [[ -f $xdg_config/git/config ]]; then
+        extra_env=("GIT_CONFIG_GLOBAL=$xdg_config/git/config" "${extra_env[@]}")
+      fi
+    fi
+  fi
+
+  # Opt-in credential mounts.
+  if (( allow_ssh )); then
+    if [[ -d $HOME/.ssh ]]; then
+      add_ro "$HOME/.ssh"
+      add_ro_symlink_targets "$HOME/.ssh"
+    else
+      warn "--ssh was requested but $HOME/.ssh does not exist"
+    fi
+  fi
+  if (( allow_ssh_agent )); then
+    if [[ -n ${SSH_AUTH_SOCK:-} && -S ${SSH_AUTH_SOCK:-} ]] &&
+       p=$(resolve_path "$SSH_AUTH_SOCK" 2>/dev/null); then
+      add_ro "$p"
+    else
+      warn "--ssh-agent was requested but SSH_AUTH_SOCK is not a socket"
+      allow_ssh_agent=0
+    fi
+  fi
+  if (( allow_git_credentials )); then
+    if [[ -f $HOME/.git-credentials ]]; then
+      add_ro "$HOME/.git-credentials"
+    else
+      warn "--git-credentials was requested but $HOME/.git-credentials does not exist"
+    fi
+  fi
+  if (( allow_netrc )); then
+    if [[ -f $HOME/.netrc ]]; then
+      add_ro "$HOME/.netrc"
+    else
+      warn "--netrc was requested but $HOME/.netrc does not exist"
+    fi
+  fi
+  if (( allow_npmrc )); then
+    if [[ -f $HOME/.npmrc ]]; then
+      add_ro "$HOME/.npmrc"
+    else
+      warn "--npmrc was requested but $HOME/.npmrc does not exist"
+    fi
+  fi
+
+  # Credential and CA files referenced by forwarded environment variables.
+  for var in GOOGLE_APPLICATION_CREDENTIALS NODE_EXTRA_CA_CERTS SSL_CERT_FILE \
+             CURL_CA_BUNDLE REQUESTS_CA_BUNDLE AWS_SHARED_CREDENTIALS_FILE \
+             AWS_CONFIG_FILE AWS_CA_BUNDLE GIT_SSL_CAINFO GIT_SSL_CAPATH; do
+    val=${!var:-}
+    [[ -n $val ]] || continue
+    if [[ -e $val ]] && p=$(resolve_path "$val" 2>/dev/null); then
+      add_ro "$p"
+    else
+      warn "$var points to a path that does not exist: $val"
+    fi
+  done
+  if [[ -n ${SSL_CERT_DIR:-} && -d ${SSL_CERT_DIR} ]] &&
+     p=$(resolve_path "$SSL_CERT_DIR" 2>/dev/null); then
+    add_ro "$p"
+  fi
+
+  # Explicit extra mounts.
+  for p in "${extra_ro[@]}"; do add_extra_mount ro "$p"; done
+  for p in "${extra_rw[@]}"; do add_extra_mount rw "$p"; done
+}
+
+# ---------------------------------------------------------------------------
+# Agent command line
+# ---------------------------------------------------------------------------
+
+build_agent_command() {
+  # --standalone is a per-command flag in OpenCode, not a global flag before a
+  # subcommand.  Drop a leading one and re-insert it in the right place below.
+  if [[ $agent == opencode && ${oc_args[0]:-} == --standalone ]]; then
+    oc_args=("${oc_args[@]:1}")
+  fi
+
+  if (( shell_mode )); then
+    cmd=("$shell_bin" -l)
+    ((${#oc_args[@]})) && cmd+=("${oc_args[@]}")
+  elif [[ $agent != opencode ]]; then
+    # Pi and omp receive their arguments verbatim.  There is no service to
+    # isolate; both keep their own state under the sandbox profile.
+    first_arg=
+    for arg in "${oc_args[@]}"; do
+      [[ $arg == -* ]] && continue
+      first_arg=$arg
+      break
+    done
+    if [[ $agent == omp && $first_arg == update ]]; then
+      die "refusing to run 'omp update' inside the sandbox; update omp on the host"
+    fi
+    if [[ $agent == pi && $first_arg == update ]]; then
+      case ${oc_args[1]:-} in
+        self|pi)
+          die "refusing to run 'pi update ${oc_args[1]}' inside the sandbox; update pi on the host"
+          ;;
+      esac
+    fi
+    cmd=("$oc_bin" "${oc_args[@]}")
+  else
+    # Refuse commands that would talk to the host's background service or
+    # manage the host installation.
+    first_arg=
+    for arg in "${oc_args[@]}"; do
+      [[ $arg == -* ]] && continue
+      first_arg=$arg
+      break
+    done
+    case $first_arg in
+      service)
+        die "refusing to run 'opencode service' inside the sandbox; use --standalone commands instead"
+        ;;
+      uninstall|upgrade|update)
+        die "refusing to run 'opencode $first_arg' inside the sandbox"
+        ;;
+      pair)
+        die "refusing to run 'opencode pair' inside the sandbox (it connects to the host service)"
+        ;;
+    esac
+    for arg in "${oc_args[@]}"; do
+      case $arg in
+        --server|--server=*|--service)
+          die "refusing '$arg' inside the sandbox; the sandbox always uses a private server"
+          ;;
+      esac
+    done
+    if [[ $first_arg == acp ]]; then
+      for arg in "${oc_args[@]}"; do
+        [[ $arg == --login ]] &&
+          die "use 'kandor auth login' instead of 'acp --login' inside the sandbox"
+      done
+    fi
+
+    has_standalone=0
+    has_help=0
+    has_version=0
+    for arg in "${oc_args[@]}"; do
+      # Options after "--" are positional arguments (for example a prompt that
+      # happens to be named "--help"), not flags.
+      [[ $arg == -- ]] && break
+      case $arg in
+        --standalone) has_standalone=1 ;;
+        --help|-h)    has_help=1 ;;
+        --version)    has_version=1 ;;
+      esac
+    done
+
+    if ((${#oc_args[@]} == 0)); then
+      cmd=("$oc_bin" --standalone)
+    elif (( has_standalone )); then
+      cmd=("$oc_bin" "${oc_args[@]}")
+    elif (( has_help || has_version )); then
+      cmd=("$oc_bin" "${oc_args[@]}")
+    else
+      sub=${oc_args[0]}
+      case $sub in
+        completions|debug|mcp|plugin|serve|acp)
+          # These commands either do not use a server or start their own.
+          cmd=("$oc_bin" "${oc_args[@]}")
+          ;;
+        auth|session)
+          # Nested subcommand, e.g. "auth list" or "session export".
+          path=("$sub")
+          for ((i = 1; i < ${#oc_args[@]}; i++)); do
+            arg=${oc_args[$i]}
+            [[ $arg == -* ]] && continue
+            path+=("$arg")
+            break
+          done
+          if ((${#path[@]} > 1)); then
+            cmd=("$oc_bin" "${path[@]}" --standalone \
+                 "${oc_args[@]:${#path[@]}}")
+          else
+            # Bare "auth" or "session" prints help; no server is involved.
+            cmd=("$oc_bin" "${oc_args[@]}")
+          fi
+          ;;
+        run|api|models|stats|mini|reload)
+          # These commands accept --standalone and use a server.  Insert it
+          # after the subcommand rather than relying on help-text formatting.
+          cmd=("$oc_bin" "$sub" --standalone "${oc_args[@]:1}")
+          ;;
+        -*|*)
+          # No subcommand: the TUI.  --standalone is a top-level flag here.
+          cmd=("$oc_bin" --standalone "${oc_args[@]}")
+          ;;
+      esac
+    fi
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+main() {
+  local default_config
+
+  # Load the configuration file before command-line parsing so that command
+  # line options can override it.
+  if [[ -n ${HOME:-} ]]; then
+    default_config=${XDG_CONFIG_HOME:-$HOME/.config}/kandor/config
+  else
+    default_config=/nonexistent
+  fi
+  load_config "${KANDOR_CONFIG:-$default_config}"
+
+  parse_args "$@"
+
+  if (( show_help )); then
+    usage
+    exit 0
+  fi
+  if (( show_version )); then
+    printf '%s %s\n' "$PROG" "$VERSION"
+    exit 0
+  fi
+
+  if (( init_config )) || [[ -n $set_agent ]]; then
+    config_file=${KANDOR_CONFIG:-$default_config}
+    if [[ -n $set_agent ]]; then
+      persist_agent "$config_file" "$set_agent"
+      log "default agent set to $set_agent in $config_file"
+    else
+      write_default_config "$config_file" "$agent"
+      log "created $config_file (default agent: $agent)"
+    fi
+    exit 0
+  fi
+
+  # -------------------------------------------------------------------------
+  # Validation and paths
+  # -------------------------------------------------------------------------
+
+  [[ -n ${HOME:-} ]] || die "HOME is not set"
+  [[ -d ${HOME:-} ]] || die "HOME is not a directory: $HOME"
+  HOME=$(resolve_path "$HOME") || die "cannot resolve HOME: $HOME"
+  [[ $HOME != / ]] || die "refusing to run with HOME=/"
+
+  [[ $profile =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] ||
+    die "invalid profile name '$profile' (use letters, digits, '.', '_' and '-')"
+
+  project_dir=$(resolve_path "$project_dir") ||
+    die "project directory does not exist: $project_dir"
+  [[ -d $project_dir ]] || die "not a directory: $project_dir"
+  [[ $project_dir != / ]] || die "refusing to use / as the project directory"
+  [[ $project_dir != "$HOME" ]] ||
+    die "refusing to use HOME as the project directory; run from a project subdirectory"
+  [[ $HOME != "$project_dir"/* ]] ||
+    die "the project directory may not be an ancestor of HOME"
+
+  command -v bwrap >/dev/null 2>&1 ||
+    die "bubblewrap (bwrap) is not installed"
+
+  BWRAP_HELP=$(bwrap --help 2>&1 || true)
+  [[ -n $BWRAP_HELP ]] || die "bwrap does not appear to work"
+
+  # A quick preflight so the user gets a useful error instead of a cryptic
+  # bwrap failure after all the mounts have been prepared.
+  if have_bwrap_opt --unshare-user-try; then
+    probe_userns=(--unshare-user-try)
+  else
+    probe_userns=(--unshare-user)
+  fi
+  if ! bwrap --ro-bind / / "${probe_userns[@]}" -- /bin/true >/dev/null 2>&1; then
+    cat >&2 <<EOF
+$PROG: error: bubblewrap cannot create a user namespace.
+
+This is usually one of:
+  * unprivileged user namespaces are disabled
+      sudo sysctl -w kernel.unprivileged_userns_clone=1
+  * AppArmor restricts unprivileged user namespaces (Ubuntu 23.10+)
+      see /etc/apparmor.d/unprivileged_userns
+  * bwrap is running inside a container that blocks namespace creation
+  * bwrap needs to be installed setuid root (check your distribution's
+    bubblewrap package)
+
+Run 'bwrap --ro-bind / / --unshare-user-try -- /bin/true' to reproduce.
+EOF
+    exit 1
+  fi
+
+  if (( shell_mode )); then
+    shell_bin=${SHELL:-/bin/bash}
+    [[ -x $shell_bin ]] || shell_bin=/bin/bash
+    [[ -x $shell_bin ]] || die "no usable shell found (tried \$SHELL and /bin/bash)"
+    shell_bin=$(resolve_path "$shell_bin") || shell_bin=/bin/bash
+    oc_bin=
+  else
+    case $agent in
+      opencode) agent_name=opencode ;;
+      pi)       agent_name=pi ;;
+      omp)      agent_name=omp ;;
+    esac
+    oc_bin=${KANDOR_BIN:-}
+    if [[ -z $oc_bin ]]; then
+      oc_bin=$(type -P "$agent_name" || true)
+    fi
+    [[ -n $oc_bin ]] ||
+      die "$agent_name was not found in PATH (set KANDOR_BIN to override)"
+    oc_bin=$(resolve_path "$oc_bin") || die "cannot resolve the $agent_name binary"
+    [[ -x $oc_bin ]] || die "$agent_name is not executable: $oc_bin"
+  fi
+
+  xdg_config=$(resolve_path_maybe "${XDG_CONFIG_HOME:-$HOME/.config}")
+  xdg_data=$(resolve_path_maybe "${XDG_DATA_HOME:-$HOME/.local/share}")
+  xdg_state=$(resolve_path_maybe "${XDG_STATE_HOME:-$HOME/.local/state}")
+  xdg_cache=$(resolve_path_maybe "${XDG_CACHE_HOME:-$HOME/.cache}")
+
+  if (( isolated )); then
+    sandbox_home=$(resolve_path_maybe "${KANDOR_HOME:-$xdg_data/kandor}")
+    profile_root=$sandbox_home/$profile
+    sandbox_xdg_config=$profile_root/config
+    sandbox_xdg_data=$profile_root/data
+    sandbox_xdg_state=$profile_root/state
+    sandbox_xdg_cache=$profile_root/cache
+    mkdir -p -- "$sandbox_xdg_config" "$sandbox_xdg_data" \
+                "$sandbox_xdg_state" "$sandbox_xdg_cache" ||
+      die "cannot create the isolated profile at $profile_root"
+    chmod 700 -- "$profile_root" 2>/dev/null || true
+  else
+    # --shared shares the host session database but uses private copies of
+    # config, state and cache.  This keeps the host service password and the
+    # host's service registration out of the sandbox while still allowing
+    # OpenCode to write its own service.json.
+    # Remove stale copies from runs that were killed before their EXIT trap,
+    # but leave directories whose owning process is still alive.
+    while IFS= read -r -d '' stale; do
+      stale_pid=$(cat "$stale/pid" 2>/dev/null || true)
+      if [[ -n $stale_pid ]] && kill -0 "$stale_pid" 2>/dev/null; then
+        continue
+      fi
+      rm -rf -- "$stale" 2>/dev/null || true
+    done < <(find "${TMPDIR:-/tmp}" -maxdepth 1 -type d \
+               -name "kandor-shared-$(id -u).*" -mmin +60 -print0 2>/dev/null)
+
+    shared_tmp=$(mktemp -d "${TMPDIR:-/tmp}/kandor-shared-$(id -u).XXXXXX") ||
+      die "cannot create a temporary shared profile"
+    printf '%s\n' "$$" > "$shared_tmp/pid"
+    trap 'rm -rf -- "$shared_tmp"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    sandbox_xdg_config=$shared_tmp/config
+    sandbox_xdg_state=$shared_tmp/state
+    sandbox_xdg_cache=$shared_tmp/cache
+    # OpenCode needs the real data directory for the shared session database.
+    # Pi and omp keep their state outside XDG, so their XDG directories stay
+    # private as well.
+    if [[ $agent == opencode ]]; then
+      sandbox_xdg_data=$xdg_data
+    else
+      sandbox_xdg_data=$shared_tmp/data
+    fi
+    mkdir -p -- "$sandbox_xdg_config" "$sandbox_xdg_state" \
+                "$sandbox_xdg_cache" "$sandbox_xdg_data" ||
+      die "cannot create the temporary shared profile"
+  fi
+
+  case $agent in
+    opencode)
+      config_dir=$sandbox_xdg_config/opencode
+      data_dir=$sandbox_xdg_data/opencode
+      state_dir=$sandbox_xdg_state/opencode
+      cache_dir=$sandbox_xdg_cache/opencode
+
+      mkdir -p -- "$config_dir" "$data_dir" "$state_dir" "$cache_dir" ||
+        die "cannot create OpenCode's config/data/state/cache directories"
+
+      if (( isolated && seed_config )); then
+        # Copy the host config into a brand-new profile once.  This keeps plugins
+        # and settings working without exposing the host's session database.
+        if [[ ! -e $config_dir/.kandor-seeded ]]; then
+          shopt -s nullglob
+          for f in "$xdg_config/opencode"/*; do
+            base=${f##*/}
+            [[ $base == service.json ]] && continue
+            cp -aL -- "$f" "$config_dir/" 2>/dev/null ||
+              warn "could not copy $f into the sandbox profile"
+          done
+          shopt -u nullglob
+          : > "$config_dir/.kandor-seeded" 2>/dev/null || true
+        fi
+      elif (( ! isolated )); then
+        # Config, state and cache are private copies in shared mode so the
+        # host's plugin/config changes are discarded when the run exits.
+        shopt -s nullglob
+        for f in "$xdg_config/opencode"/*; do
+          base=${f##*/}
+          [[ $base == service.json ]] && continue
+          cp -aL -- "$f" "$config_dir/" 2>/dev/null ||
+            warn "could not copy $f into the shared sandbox profile"
+        done
+        shopt -u nullglob
+        warn "sharing the host OpenCode session database; config, state and cache use temporary copies"
+      fi
+      ;;
+    pi)
+      # Pi stores everything under one agent directory (~/.pi/agent).  An
+      # isolated profile mounts a sandbox-only copy; shared mode mounts the
+      # host directory read-write so config changes and logins persist.
+      if (( isolated )); then
+        pi_root=$profile_root/pi
+        pi_agent_dir=$pi_root/agent
+        mkdir -p -- "$pi_agent_dir" ||
+          die "cannot create the Pi profile at $pi_root"
+
+        if (( seed_config )); then
+          if [[ ! -e $pi_agent_dir/.kandor-seeded ]]; then
+            shopt -s nullglob
+            for f in "$HOME/.pi/agent"/*; do
+              base=${f##*/}
+              case $base in
+                # Never copy credentials or host sessions into a profile.
+                auth.json|mcp-auth.json|sessions) continue ;;
+              esac
+              cp -aL -- "$f" "$pi_agent_dir/" 2>/dev/null ||
+                warn "could not copy $f into the sandbox profile"
+            done
+            shopt -u nullglob
+            : > "$pi_agent_dir/.kandor-seeded" 2>/dev/null || true
+          fi
+        fi
+      else
+        pi_agent_dir=$HOME/.pi/agent
+        mkdir -p -- "$pi_agent_dir" ||
+          die "cannot create $pi_agent_dir for shared mode"
+        warn "sharing the entire host ~/.pi/agent read-write; sessions, settings and stored credentials are exposed to the sandbox"
+      fi
+      ;;
+    omp)
+      # omp keeps config, sessions and caches under ~/.omp.  An isolated
+      # profile mounts a sandbox-only tree there; --shared mounts the host's
+      # whole ~/.omp read-write instead.
+      if (( isolated )); then
+        omp_root=$profile_root/omp
+        mkdir -p -- "$omp_root/agent" ||
+          die "cannot create the omp profile at $omp_root"
+
+        if (( seed_config )); then
+          if [[ ! -e $omp_root/.kandor-seeded ]]; then
+            for src in "$HOME/.omp/agent/config.yml" \
+                       "$HOME/.omp/agent/config.yaml" \
+                       "$HOME/.omp/agent/AGENTS.md" \
+                       "$HOME/.omp/agent/settings.json" \
+                       "$HOME/.omp/agent/commands" \
+                       "$HOME/.omp/agent/prompts" \
+                       "$HOME/.omp/agent/skills" \
+                       "$HOME/.omp/agent/themes" \
+                       "$HOME/.omp/agent/tools" \
+                       "$HOME/.omp/agent/modules" \
+                       "$HOME/.omp/agent/memories" \
+                       "$HOME/.omp/agent/agents" \
+                       "$HOME/.omp/plugins" \
+                       "$HOME/.omp/marketplaces.json"; do
+              [[ -e $src ]] || continue
+              case $src in
+                "$HOME/.omp/plugins")
+                  # Plugin node_modules may contain symlinks into the host's
+                  # package cache; preserve them instead of dereferencing.
+                  cp -a -- "$src" "$omp_root/plugins" 2>/dev/null ||
+                    warn "could not copy $src into the sandbox profile"
+                  ;;
+                "$HOME/.omp/marketplaces.json")
+                  cp -aL -- "$src" "$omp_root/marketplaces.json" 2>/dev/null ||
+                    warn "could not copy $src into the sandbox profile"
+                  ;;
+                *)
+                  cp -aL -- "$src" "$omp_root/agent/${src#"$HOME/.omp/agent/"}" \
+                    2>/dev/null ||
+                    warn "could not copy $src into the sandbox profile"
+                  ;;
+              esac
+            done
+            : > "$omp_root/.kandor-seeded" 2>/dev/null || true
+          fi
+        fi
+      else
+        omp_root=$HOME/.omp
+        mkdir -p -- "$omp_root" ||
+          die "cannot create $omp_root for shared mode"
+        warn "sharing the entire host ~/.omp read-write; sessions, settings and stored credentials are exposed to the sandbox"
+      fi
+      ;;
+  esac
+
+  if (( new_session && ! new_session_explicit )); then
+    warn "TIOCSTI is enabled on this kernel; using --new-session for safety"
+    warn "terminal resizing may not work; pass --no-new-session to disable it"
+  fi
+
+  uid=$(id -u)
+  service_port=
+  if [[ $agent == opencode ]]; then
+    service_port=$(find_free_port 2>/dev/null || true)
+  fi
+  runtime_dir=${XDG_RUNTIME_DIR:-/run/user/$uid}
+  runtime_dir=$(resolve_path_maybe "$runtime_dir")
+  if [[ ! -d $runtime_dir ]]; then
+    runtime_dir=/tmp/kandor-runtime
+  fi
+
+  build_mounts
+
+  # Service credentials.  Both profile modes use a writable, private config and
+  # state directory, so OpenCode can create and update its own service.json.
+  # A free port prevents a sandbox service from colliding with the host service.
+  # Pi and omp do not use OpenCode's service registration.
+  if [[ $agent == opencode ]]; then
+    if [[ -n $service_port ]]; then
+      service_content=$(printf '{"port": %s}' "$service_port")
+    else
+      service_content='{}'
+      warn "could not find a free TCP port for OpenCode's private service"
+    fi
+
+    rm -f -- "$config_dir/service.json" "$state_dir/service.json" 2>/dev/null || true
+    if ! { printf '%s\n' "$service_content" > "$config_dir/service.json"; } 2>/dev/null; then
+      warn "could not write $config_dir/service.json"
+    fi
+    if ! { printf '{}\n' > "$state_dir/service.json"; } 2>/dev/null; then
+      warn "could not write $state_dir/service.json"
+    fi
+    chmod 600 "$config_dir/service.json" "$state_dir/service.json" 2>/dev/null || true
+  fi
+
+  # -------------------------------------------------------------------------
+  # Namespaces and security options
+  # -------------------------------------------------------------------------
+
+  if have_bwrap_opt --unshare-user-try; then
+    userns_opt=(--unshare-user-try)
+  else
+    userns_opt=(--unshare-user)
+  fi
+
+  if (( allow_userns )); then
+    BWRAP+=("${userns_opt[@]}")
+  elif have_bwrap_opt --disable-userns &&
+       bwrap --ro-bind / / --unshare-user --disable-userns -- /bin/true \
+         >/dev/null 2>&1; then
+    BWRAP+=(--unshare-user --disable-userns)
+  else
+    BWRAP+=("${userns_opt[@]}")
+    (( verbose )) && warn "nested user namespaces cannot be disabled on this system"
+  fi
+
+  BWRAP+=(--unshare-pid)
+  BWRAP+=(--unshare-ipc)
+  BWRAP+=(--unshare-uts)
+  have_bwrap_opt --unshare-cgroup-try && BWRAP+=(--unshare-cgroup-try)
+  (( network )) || BWRAP+=(--unshare-net)
+
+  BWRAP+=(--hostname "$SANDBOX_HOSTNAME")
+  if (( new_session )) && have_bwrap_opt --new-session; then
+    BWRAP+=(--new-session)
+  fi
+  have_bwrap_opt --die-with-parent && BWRAP+=(--die-with-parent)
+  have_bwrap_opt --cap-drop && BWRAP+=(--cap-drop ALL)
+
+  BWRAP+=(--chdir "$project_dir")
+
+  # -------------------------------------------------------------------------
+  # Environment
+  # -------------------------------------------------------------------------
+
+  BWRAP+=(--clearenv)
+
+  sandbox_path=${PATH:-/usr/local/bin:/usr/bin:/bin}
+  case ":$sandbox_path:" in
+    *:/usr/bin:*) ;;
+    *) sandbox_path=/usr/bin:/bin:$sandbox_path ;;
+  esac
+
+  setenv HOME "$HOME"
+  setenv USER "${USER:-$(id -un)}"
+  setenv LOGNAME "${LOGNAME:-${USER:-$(id -un)}}"
+  setenv SHELL "${SHELL:-/bin/bash}"
+  setenv PATH "$sandbox_path"
+  setenv HOSTNAME "$SANDBOX_HOSTNAME"
+  setenv TERM "${TERM:-xterm-256color}"
+  setenv TMPDIR /tmp
+  setenv XDG_CONFIG_HOME "$sandbox_xdg_config"
+  setenv XDG_DATA_HOME "$sandbox_xdg_data"
+  setenv XDG_STATE_HOME "$sandbox_xdg_state"
+  setenv XDG_CACHE_HOME "$sandbox_xdg_cache"
+  setenv XDG_RUNTIME_DIR "$runtime_dir"
+  setenv LANG "${LANG:-C.UTF-8}"
+  if [[ $agent == opencode ]]; then
+    setenv OPENCODE_DISABLE_AUTOUPDATE 1
+  elif [[ $agent == pi ]]; then
+    # In an isolated profile this is the sandbox-only agent directory; in
+    # shared mode it is the host ~/.pi/agent tree mounted read-write.
+    setenv PI_CODING_AGENT_DIR "$HOME/.pi/agent"
+    (( isolated )) || setenv PI_CODING_AGENT_SESSION_DIR "$HOME/.pi/agent/sessions"
+  fi
+
+  [[ -n ${COLORTERM:-} ]] && setenv COLORTERM "$COLORTERM"
+  [[ -n ${NO_COLOR:-} ]] && setenv NO_COLOR "$NO_COLOR"
+  [[ -n ${FORCE_COLOR:-} ]] && setenv FORCE_COLOR "$FORCE_COLOR"
+  [[ -n ${CLICOLOR:-} ]] && setenv CLICOLOR "$CLICOLOR"
+  [[ -n ${CLICOLOR_FORCE:-} ]] && setenv CLICOLOR_FORCE "$CLICOLOR_FORCE"
+  [[ -n ${TZ:-} ]] && setenv TZ "$TZ"
+  [[ -n ${EDITOR:-} ]] && setenv EDITOR "$EDITOR"
+  [[ -n ${VISUAL:-} ]] && setenv VISUAL "$VISUAL"
+  (( allow_ssh_agent )) && setenv SSH_AUTH_SOCK "$(resolve_path "$SSH_AUTH_SOCK")"
+
+  # Forward provider credentials, proxy settings and CA configuration.  The
+  # list is deliberately narrow: arbitrary host variables (and especially the
+  # host's OPENCODE_* service/session variables) are not inherited.
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    case $name in
+      HOME|USER|LOGNAME|SHELL|PATH|TERM|COLORTERM|NO_COLOR|FORCE_COLOR|CLICOLOR|CLICOLOR_FORCE|\
+      TMPDIR|TZ|LANG|LANGUAGE|LC_*|XDG_*|HOSTNAME|PWD|OLDPWD|SHLVL|_|\
+      EDITOR|VISUAL)
+        continue
+        ;;
+      OPENCODE|OPENCODE_SESSION_ID|OPENCODE_CLIENT|OPENCODE_TERMINAL|\
+      OPENCODE_PASSWORD|OPENCODE_SERVER_PASSWORD|OPENCODE_DB|OPENCODE_CONFIG|\
+      OPENCODE_CONFIG_DIR|OPENCODE_CONFIG_CONTENT|AI_AGENT|SSH_AUTH_SOCK|\
+      PI_SESSION_FILE|PI_SESSION_ID|PI_CODING_AGENT|PI_CODING_AGENT_DIR|\
+      PI_CODING_AGENT_SESSION_DIR|PI_PROFILE|OMP_PROFILE|OMP_AUTH_BROKER_URL|\
+      OMP_AUTH_BROKER_TOKEN|\
+      DBUS_SESSION_BUS_ADDRESS|DISPLAY|WAYLAND_DISPLAY|XAUTHORITY)
+        continue
+        ;;
+    esac
+    case $name in
+      *_API_KEY|*_API_KEY_*|*_API_BASE|*_API_BASE_*|*_BASE_URL|*_AUTH_TOKEN|\
+      *_ACCESS_TOKEN|*_SECRET_KEY|*_SECRET_ACCESS_KEY|*_API_TOKEN|*_ACCESS_KEY|\
+      *_SESSION_TOKEN)
+        setenv "$name" "${!name}"
+        ;;
+      OPENAI_*|ANTHROPIC_*|OPENROUTER_*|GEMINI_*|GOOGLE_*|VERTEX_*|AWS_*|\
+      AZURE_*|DEEPSEEK_*|XAI_*|GROQ_*|MISTRAL_*|COHERE_*|PERPLEXITY_*|\
+      TOGETHER_*|FIREWORKS_*|CEREBRAS_*|OLLAMA_*|LMSTUDIO_*|LM_STUDIO_*|\
+      HF_*|HUGGING_FACE_*|REPLICATE_*)
+        setenv "$name" "${!name}"
+        ;;
+      HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|http_proxy|https_proxy|all_proxy|no_proxy)
+        setenv "$name" "${!name}"
+        ;;
+      SSL_CERT_FILE|SSL_CERT_DIR|NODE_EXTRA_CA_CERTS|CURL_CA_BUNDLE|\
+      REQUESTS_CA_BUNDLE|GIT_SSL_CAINFO|GIT_SSL_CAPATH|AWS_CA_BUNDLE)
+        setenv "$name" "${!name}"
+        ;;
+      EDITOR|VISUAL|GIT_EDITOR)
+        setenv "$name" "${!name}"
+        ;;
+      LANG|LANGUAGE|LC_*|TZ)
+        setenv "$name" "${!name}"
+        ;;
+      TERM_PROGRAM|TERM_PROGRAM_VERSION)
+        setenv "$name" "${!name}"
+        ;;
+      *)
+        continue
+        ;;
+    esac
+  done < <(compgen -e)
+
+  for spec in "${extra_env[@]}"; do
+    [[ -n $spec ]] || continue
+    if [[ $spec == *=* ]]; then
+      name=${spec%%=*}
+      value=${spec#*=}
+    else
+      name=$spec
+      if [[ ! -v $name ]]; then
+        warn "environment variable $name is not set; skipping"
+        continue
+      fi
+      value=${!name}
+    fi
+    [[ $name =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] ||
+      die "invalid environment variable name: $name"
+    setenv "$name" "$value"
+  done
+
+  build_agent_command
+
+  if (( verbose )); then
+    log "agent:    $agent"
+    log "project:  $project_dir"
+    if (( isolated )); then
+      log "profile:  $profile ($profile_root)"
+    elif [[ $agent == opencode ]]; then
+      log "profile:  shared sessions (private config/state/cache copy)"
+    elif [[ $agent == pi ]]; then
+      log "profile:  shared host $HOME/.pi/agent tree"
+    else
+      log "profile:  shared host $HOME/.omp tree"
+    fi
+    log "network:  $([[ $network == 1 ]] && echo shared || echo isolated)"
+    log "runtime:  $runtime_dir"
+    (( shell_mode )) && log "command:  $shell_bin" || log "command:  $oc_bin"
+  fi
+
+  if (( dry_run )); then
+    printable=("${BWRAP[@]}" -- "${cmd[@]}")
+    for ((i = 0; i < ${#printable[@]}; i++)); do
+      if [[ ${printable[$i]} == --setenv ]] && ((i + 2 < ${#printable[@]})); then
+        name=${printable[$((i + 1))]}
+        case $name in
+          *KEY*|*TOKEN*|*SECRET*|*PASSWORD*|*CREDENTIAL*|AWS_*|AZURE_*|\
+          GOOGLE_APPLICATION_CREDENTIALS|SSH_AUTH_SOCK)
+            printable[$((i + 2))]='<redacted>'
+            ;;
+        esac
+      fi
+    done
+    printf '%q ' "${printable[@]}"
+    printf '\n'
+    exit 0
+  fi
+
+  if [[ -n $shared_tmp ]]; then
+    # Keep the shell alive so the temporary shared config/state copy can be
+    # removed when bwrap exits.
+    close_extra_fds
+    "${BWRAP[@]}" -- "${cmd[@]}"
+    status=$?
+    rm -rf -- "$shared_tmp"
+    trap - EXIT
+    exit "$status"
+  fi
+
+  close_extra_fds
+  exec "${BWRAP[@]}" -- "${cmd[@]}"
+}
 
 # ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
-
-if (( verbose )); then
-  log "project:  $project_dir"
-  if (( isolated )); then
-    log "profile:  $profile ($profile_root)"
-  else
-    log "profile:  shared sessions (private config/state/cache copy)"
-  fi
-  log "network:  $([[ $network == 1 ]] && echo shared || echo isolated)"
-  log "runtime:  $runtime_dir"
-  (( shell_mode )) && log "command:  $shell_bin" || log "command:  $oc_bin"
+if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
+  main "$@"
 fi
-
-if (( dry_run )); then
-  printable=("${BWRAP[@]}" -- "${cmd[@]}")
-  for ((i = 0; i < ${#printable[@]}; i++)); do
-    if [[ ${printable[$i]} == --setenv ]] && ((i + 2 < ${#printable[@]})); then
-      name=${printable[$((i + 1))]}
-      case $name in
-        *KEY*|*TOKEN*|*SECRET*|*PASSWORD*|*CREDENTIAL*|AWS_*|AZURE_*|\
-        GOOGLE_APPLICATION_CREDENTIALS|SSH_AUTH_SOCK)
-          printable[$((i + 2))]='<redacted>'
-          ;;
-      esac
-    fi
-  done
-  printf '%q ' "${printable[@]}"
-  printf '\n'
-  exit 0
-fi
-
-if [[ -n $shared_tmp ]]; then
-  # Keep the shell alive so the temporary shared config/state copy can be
-  # removed when bwrap exits.
-  close_extra_fds
-  "${BWRAP[@]}" -- "${cmd[@]}"
-  status=$?
-  rm -rf -- "$shared_tmp"
-  trap - EXIT
-  exit "$status"
-fi
-
-close_extra_fds
-exec "${BWRAP[@]}" -- "${cmd[@]}"
