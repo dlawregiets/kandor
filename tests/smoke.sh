@@ -40,7 +40,20 @@ printf 'name = "smoke"\n' > "$tmp/project/smoke.txt"
 check "--help works" "$kandor --help >/dev/null 2>&1"
 check "--version works" "$kandor --version | grep -q '^kandor '"
 
-dry=$($kandor -C "$tmp/project" --dry-run 2>/dev/null)
+init_cfg=$tmp/init-config
+KANDOR_CONFIG=$init_cfg $kandor --init-config --agent omp >/dev/null 2>&1
+check "--init-config creates a config file" "[[ -f $init_cfg ]]"
+check "--init-config writes the requested agent" "grep -qx 'agent omp' '$init_cfg'"
+
+KANDOR_CONFIG=$init_cfg $kandor --set-agent pi >/dev/null 2>&1
+check "--set-agent updates the saved default" \
+  "grep -qx 'agent pi' '$init_cfg' && ! grep -qx 'agent omp' '$init_cfg'"
+
+KANDOR_CONFIG=$init_cfg $kandor --init-config >/dev/null 2>&1
+rc=$?
+check "--init-config does not overwrite an existing file" "[[ $rc -ne 0 ]]"
+
+dry=$($kandor -C "$tmp/project" --isolated --dry-run 2>/dev/null)
 check "dry-run mounts / read-only" "grep -q -- '--ro-bind / /' <<<\"\$dry\""
 check "dry-run unshares PID" "grep -q -- '--unshare-pid' <<<\"\$dry\""
 check "dry-run clears the environment" "grep -q -- '--clearenv' <<<\"\$dry\""
@@ -48,6 +61,12 @@ check "dry-run binds the project" "grep -q -- \"--bind $tmp/project $tmp/project
 check "dry-run binds the isolated config directory" \
   "grep -q -- \"--bind $tmp/profiles/default/config/opencode\" <<<\"\$dry\""
 check "dry-run forces --standalone for the TUI" "grep -q -- '--standalone' <<<\"\$dry\""
+
+dry_shared=$($kandor -C "$tmp/project" --dry-run 2>/dev/null)
+check "shared mode is the default" \
+  "! grep -q -- 'profiles/default/config/opencode' <<<\"\$dry_shared\""
+check "default dry-run still hides the home directory" \
+  "grep -q -- '--tmpfs /home' <<<\"\$dry_shared\""
 
 secret_out=$(TEST_SECRET=supersecret $kandor --env TEST_SECRET --dry-run 2>/dev/null)
 check "dry-run redacts secrets" "! grep -q supersecret <<<\"\$secret_out\""
@@ -100,7 +119,7 @@ check "sandbox HOME writes do not reach the host" "[[ ! -e $HOME/$home_marker ]]
 # ---------------------------------------------------------------------------
 out=$(run_shell 'cat "$XDG_CONFIG_HOME/opencode/service.json"; cat "$XDG_STATE_HOME/opencode/service.json"')
 check "config service.json has a private port" "grep -q '\"port\"' <<<\"\$out\""
-check "state service.json starts empty" "[[ \$(sed -n '2p' <<<\"\$out\") == '{}' ]]"
+check "state service.json starts empty" "grep -qx '{}' <<<\"\$out\""
 
 host_service=$HOME/.config/opencode/service.json
 if [[ -f $host_service ]]; then
@@ -143,6 +162,83 @@ $kandor --profile smoke --shell -- -c 'cat "$XDG_DATA_HOME/opencode/smoke-file"'
 check "isolated profile persists between runs" "[[ -f $tmp/profiles/smoke/data/opencode/smoke-file ]]"
 check "isolated profile does not use the host data directory" \
   "[[ -f $tmp/profiles/smoke/data/opencode/smoke-file && ! -e $HOME/.local/share/opencode/smoke-file ]]"
+
+# ---------------------------------------------------------------------------
+# Other agents (Pi and oh-my-pi)
+# ---------------------------------------------------------------------------
+check "unknown agent is rejected" \
+  "! $kandor --agent nope --dry-run >/dev/null 2>&1"
+
+if command -v pi >/dev/null 2>&1; then
+  dry_pi=$($kandor --agent pi --isolated -C "$tmp/project" --dry-run 2>/dev/null)
+  check "pi dry-run binds the profile agent directory" \
+    "grep -q -- \"--bind $tmp/profiles/default/pi/agent $HOME/.pi/agent\" <<<\"\$dry_pi\""
+  check "pi dry-run sets PI_CODING_AGENT_DIR" \
+    "grep -q -- '--setenv PI_CODING_AGENT_DIR' <<<\"\$dry_pi\""
+  check "pi profile does not seed stored credentials" \
+    "[[ ! -e $tmp/profiles/default/pi/agent/auth.json ]]"
+  check "pi profile does not seed host sessions" \
+    "[[ ! -e $tmp/profiles/default/pi/agent/sessions ]]"
+
+  dry_pi_shared=$($kandor --agent pi -C "$tmp/project" --dry-run 2>/dev/null)
+  check "pi defaults to shared state, not a profile" \
+    "! grep -q -- \"$tmp/profiles/default/pi/agent\" <<<\"\$dry_pi_shared\""
+  check "pi shared mode binds the host agent directory" \
+    "grep -q -- \"--bind $HOME/.pi/agent $HOME/.pi/agent\" <<<\"\$dry_pi_shared\""
+
+  # A throwaway HOME proves that config written in shared mode lands in the
+  # host ~/.pi/agent tree instead of a private copy.
+  pi_home=$tmp/pi-home
+  mkdir -p "$pi_home/.pi/agent"
+  HOME=$pi_home $kandor --agent pi -C "$tmp/project" --shell -- -c \
+    'echo persisted > "$HOME/.pi/agent/smoke-file"' >/dev/null 2>&1
+  check "pi shared mode writes config to the host agent directory" \
+    "[[ -f $pi_home/.pi/agent/smoke-file ]]"
+
+  out=$($kandor --agent pi --isolated -C "$tmp/project" -- --version 2>&1)
+  check "pi runs inside the sandbox" "grep -qE '^[0-9]+\\.[0-9]+' <<<\"\$out\""
+
+  $kandor --agent pi --isolated -C "$tmp/project" --shell -- -c \
+    'echo persisted > "$HOME/.pi/agent/smoke-file"' >/dev/null 2>&1
+  check "pi profile persists between runs" \
+    "[[ -f $tmp/profiles/default/pi/agent/smoke-file ]]"
+
+  if [[ -d $HOME/.pi/agent/sessions ]]; then
+    out=$($kandor --agent pi --shared -C "$tmp/project" --shell -- -c \
+      'stat -c %d:%i "$HOME/.pi/agent/sessions"' 2>/dev/null)
+    check "pi shared mode mounts the host session directory" \
+      "[[ \$out == \$(stat -c %d:%i \"\$HOME/.pi/agent/sessions\") ]]"
+  fi
+fi
+
+if command -v omp >/dev/null 2>&1; then
+  dry_omp=$($kandor --agent omp --isolated -C "$tmp/project" --dry-run 2>/dev/null)
+  check "omp dry-run binds the profile config root" \
+    "grep -q -- \"--bind $tmp/profiles/default/omp $HOME/.omp\" <<<\"\$dry_omp\""
+  check "omp profile does not seed the credential database" \
+    "[[ ! -e $tmp/profiles/default/omp/agent/agent.db ]]"
+  check "omp profile does not seed host sessions" \
+    "[[ ! -e $tmp/profiles/default/omp/agent/sessions ]]"
+  check "omp profile is seeded" \
+    "[[ -f $tmp/profiles/default/omp/.kandor-seeded ]]"
+
+  dry_omp_shared=$($kandor --agent omp -C "$tmp/project" --dry-run 2>/dev/null)
+  check "omp defaults to the host config root" \
+    "grep -q -- \"--bind $HOME/.omp $HOME/.omp\" <<<\"\$dry_omp_shared\""
+
+  out=$($kandor --agent omp --isolated -C "$tmp/project" -- --version 2>&1)
+  check "omp runs inside the sandbox" "grep -q '^omp/' <<<\"\$out\""
+
+  $kandor --agent omp --isolated -C "$tmp/project" --shell -- -c \
+    'echo persisted > "$HOME/.omp/smoke-file"' >/dev/null 2>&1
+  check "omp profile persists between runs" \
+    "[[ -f $tmp/profiles/default/omp/smoke-file ]]"
+
+  out=$($kandor --agent omp --shared -C "$tmp/project" --shell -- -c \
+    'stat -c %d:%i "$HOME/.omp"' 2>/dev/null)
+  check "omp shared mode mounts the host config root" \
+    "[[ \$out == \$(stat -c %d:%i \"\$HOME/.omp\") ]]"
+fi
 
 # ---------------------------------------------------------------------------
 # Network isolation
