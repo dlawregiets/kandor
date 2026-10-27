@@ -1,5 +1,9 @@
 # kandor
 
+> [!CAUTION]
+> This is a vibe coded sandbox security tool and not meant for production use.
+> This is just a learning experience.
+
 Run [OpenCode](https://opencode.ai) inside a
 [bubblewrap](https://github.com/containers/bubblewrap) sandbox on Linux.
 
