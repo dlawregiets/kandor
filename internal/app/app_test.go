@@ -28,10 +28,21 @@ func configFile(t *testing.T, content string) string {
 	return path
 }
 
+func requireBwrap(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("bwrap"); err != nil {
+		t.Skip("bwrap not installed")
+	}
+	probe := exec.Command("bwrap", "--ro-bind", "/", "/", "--unshare-user-try", "--", "/bin/true")
+	if err := probe.Run(); err != nil {
+		t.Skipf("bwrap cannot create a user namespace here: %v", err)
+	}
+}
+
 func TestMainVersion(t *testing.T) {
 	code, out, _ := call(t, "--version")
-	if code != 0 || out != "kandor 0.3.0\n" {
-		t.Errorf("--version = %d, %q", code, out)
+	if code != 0 || out != "kandor "+version+"\n" {
+		t.Errorf("--version = %d, %q; want kandor %s", code, out, version)
 	}
 }
 
@@ -101,9 +112,7 @@ func TestMainProjectValidation(t *testing.T) {
 }
 
 func TestMainDryRun(t *testing.T) {
-	if _, err := exec.LookPath("bwrap"); err != nil {
-		t.Skip("bwrap not installed")
-	}
+	requireBwrap(t)
 	configFile(t, "[sandbox]\nnetwork = false\n")
 	t.Setenv("OPENROUTER_API_KEY", "sk-or-kandor-test")
 	t.Setenv("KANDOR_BIN", "/usr/bin/true")
