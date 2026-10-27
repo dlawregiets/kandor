@@ -7,8 +7,8 @@ import (
 	"github.com/dlawregiets/kandor/internal/config"
 )
 
-// AddNamespaces adds the namespace and security options, the working
-// directory and --clearenv.  disableUsernsWorks says whether this kernel
+// AddNamespaces adds the namespace and security options and the working
+// directory.  disableUsernsWorks says whether this kernel
 // accepts --disable-userns; newSession whether to detach from the terminal.
 func AddNamespaces(p *Plan, s config.Settings, f Features, disableUsernsWorks, newSession bool, project string) {
 	userns := "--unshare-user"
@@ -37,7 +37,7 @@ func AddNamespaces(p *Plan, s config.Settings, f Features, disableUsernsWorks, n
 	if f.CapDrop {
 		p.Arg("--cap-drop", "ALL")
 	}
-	p.Arg("--chdir", project, "--clearenv")
+	p.Arg("--chdir", project)
 }
 
 // TIOCSTIPath is where the kernel says whether TIOCSTI is allowed.

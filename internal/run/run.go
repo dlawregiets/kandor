@@ -114,19 +114,21 @@ func (g *Guard) Pending() (syscall.Signal, bool) {
 }
 
 // Child runs argv with a temporary Guard; see Guard.Child.
-func Child(argv []string) int {
+func Child(argv, env []string) int {
 	g := NewGuard()
 	defer g.Stop()
-	return g.Child(argv)
+	return g.Child(argv, env)
 }
 
-// Child runs argv with kandor's standard streams and returns its exit
+// Child runs argv with kandor's standard streams and exactly the
+// environment env (kandor's own when env is nil), and returns its exit
 // status (128 + n if it was killed by signal n).  While it runs, SIGINT and
 // SIGQUIT are left to the child (the terminal delivers them to it), and
 // SIGTERM and SIGHUP are forwarded to it, so kandor outlives the sandbox and
 // can clean up.
-func (g *Guard) Child(argv []string) int {
+func (g *Guard) Child(argv, env []string) int {
 	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Env = env
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 
 	if err := cmd.Start(); err != nil {

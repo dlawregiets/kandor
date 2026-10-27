@@ -53,7 +53,7 @@ check "--init-config does not overwrite an existing file" "[[ $rc -ne 0 ]]"
 dry=$($kandor -C "$tmp/project" --isolated --dry-run 2>/dev/null)
 check "dry-run mounts / read-only" "grep -q -- '--ro-bind / /' <<<\"\$dry\""
 check "dry-run unshares PID" "grep -q -- '--unshare-pid' <<<\"\$dry\""
-check "dry-run clears the environment" "grep -q -- '--clearenv' <<<\"\$dry\""
+check "dry-run starts from an empty environment" "grep -q '^env -i ' <<<\"\$dry\""
 check "dry-run binds the project" "grep -q -- \"--bind $tmp/project $tmp/project\" <<<\"\$dry\""
 check "dry-run binds the isolated config directory" \
   "grep -q -- \"--bind $tmp/profiles/default/config/opencode\" <<<\"\$dry\""
@@ -73,7 +73,8 @@ proxy_out=$(HTTPS_PROXY=http://user:proxypw@proxy:3128 $kandor --dry-run 2>/dev/
 check "dry-run redacts credentials in URLs" "! grep -q proxypw <<<\"\$proxy_out\""
 
 env_out=$(STRIPE_SECRET_KEY=x ANTHROPIC_API_KEY=y $kandor --dry-run 2>/dev/null)
-check "provider keys are forwarded" "grep -q -- '--setenv ANTHROPIC_API_KEY' <<<\"\$env_out\""
+check "provider keys are forwarded" "grep -q -- 'ANTHROPIC_API_KEY=' <<<\"\$env_out\""
+check "no values on bwrap's command line" "! grep -qE -- '--setenv|--clearenv' <<<\"\$env_out\""
 check "unrelated secrets are not forwarded" "! grep -q STRIPE_SECRET_KEY <<<\"\$env_out\""
 
 # ---------------------------------------------------------------------------
@@ -183,6 +184,25 @@ check "--agent is passed to OpenCode" \
 # Process handling and unusual inputs
 # ---------------------------------------------------------------------------
 mkdir -p "$tmp/my proj"
+# Variables travel in bwrap's environment, which only this user can read,
+# not on its command line, which every user can read through ps.
+out=$(OPENROUTER_API_KEY=smoke-or-key KANDOR_HOST_ONLY=x $kandor -C "$tmp/project" --shell -- -c \
+  'echo "key=$OPENROUTER_API_KEY host=${KANDOR_HOST_ONLY:-unset}"' 2>/dev/null)
+check "provider keys reach the sandbox" "[[ \"\$out\" == 'key=smoke-or-key host=unset' ]]"
+
+OPENROUTER_API_KEY=smoke-or-key $kandor -C "$tmp/project" --shell -- -c 'exec sleep 4128' >/dev/null 2>&1 &
+envpid=$!
+bwrap_pid=
+for _ in $(seq 50); do
+  bwrap_pid=$(pgrep -P "$envpid" -x bwrap) && break
+  sleep 0.1
+done
+cmdline=$(tr '\0' ' ' <"/proc/$bwrap_pid/cmdline" 2>/dev/null)
+check "bwrap is running for the command-line check" "[[ -n \$bwrap_pid ]] && grep -q -- '--unshare-pid' <<<\"\$cmdline\""
+check "keys are not on bwrap's command line" "! grep -q smoke-or-key <<<\"\$cmdline\""
+kill -TERM "$envpid" 2>/dev/null
+wait "$envpid" 2>/dev/null
+
 out=$($kandor -C "$tmp/my proj" --shell -- -c 'pwd' 2>/dev/null)
 check "project directories with spaces work" "[[ \$out == '$tmp/my proj' ]]"
 dry_space=$($kandor -C "$tmp/my proj" --dry-run 2>/dev/null)

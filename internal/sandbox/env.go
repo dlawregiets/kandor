@@ -57,8 +57,8 @@ var envForwarded = []string{
 var validEnvName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Environment returns the variables to set inside the sandbox, in order (a
-// later variable of the same name wins).  bwrap starts from an empty
-// environment, so nothing else reaches the sandbox.
+// later variable of the same name wins).  They become bwrap's whole
+// environment, which it passes on to the sandbox, so nothing else reaches it.
 func Environment(in EnvInput) ([]agent.EnvVar, error) {
 	host := map[string]string{}
 	var names []string
@@ -148,4 +148,23 @@ func Environment(in EnvInput) ([]agent.EnvVar, error) {
 		vars = append(vars, agent.EnvVar{Name: spec.Name, Value: value})
 	}
 	return vars, nil
+}
+
+// EnvList turns vars into bwrap's environment, keeping the last value of each
+// name.  The values travel in the environment rather than as --setenv
+// arguments because any user can read a process's arguments (ps,
+// /proc/PID/cmdline), while its environment is private to the same user.
+func EnvList(vars []agent.EnvVar) []string {
+	index := map[string]int{}
+	var env []string
+	for _, v := range vars {
+		kv := v.Name + "=" + v.Value
+		if i, ok := index[v.Name]; ok {
+			env[i] = kv
+			continue
+		}
+		index[v.Name] = len(env)
+		env = append(env, kv)
+	}
+	return env
 }

@@ -13,16 +13,16 @@ import (
 )
 
 func TestChildExitCode(t *testing.T) {
-	if code := Child([]string{"sh", "-c", "exit 7"}); code != 7 {
+	if code := Child([]string{"sh", "-c", "exit 7"}, nil); code != 7 {
 		t.Errorf("exit code = %d, want 7", code)
 	}
-	if code := Child([]string{"true"}); code != 0 {
+	if code := Child([]string{"true"}, nil); code != 0 {
 		t.Errorf("exit code = %d, want 0", code)
 	}
 }
 
 func TestChildSignalStatus(t *testing.T) {
-	if code := Child([]string{"sh", "-c", "kill -TERM $$"}); code != 143 {
+	if code := Child([]string{"sh", "-c", "kill -TERM $$"}, nil); code != 143 {
 		t.Errorf("exit code = %d, want 143", code)
 	}
 }
@@ -38,7 +38,7 @@ func TestGuardRespectsIgnoredSignals(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 		syscall.Kill(os.Getpid(), syscall.SIGHUP)
 	}()
-	if code := g.Child([]string{"sh", "-c", "sleep 1; exit 0"}); code != 0 {
+	if code := g.Child([]string{"sh", "-c", "sleep 1; exit 0"}, nil); code != 0 {
 		t.Errorf("exit code = %d, want 0: an ignored SIGHUP was forwarded", code)
 	}
 }
@@ -50,7 +50,7 @@ func TestGuardForwardsTerm(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 		syscall.Kill(os.Getpid(), syscall.SIGTERM)
 	}()
-	if code := g.Child([]string{"sh", "-c", "sleep 5"}); code != 143 {
+	if code := g.Child([]string{"sh", "-c", "sleep 5"}, nil); code != 143 {
 		t.Errorf("exit code = %d, want 143", code)
 	}
 }
@@ -77,8 +77,19 @@ func TestGuardPendingBeforeChild(t *testing.T) {
 	t.Error("SIGTERM before the sandbox started was not reported")
 }
 
+// The child gets exactly the environment it is given, and nothing of
+// kandor's own.
+func TestChildEnvironment(t *testing.T) {
+	t.Setenv("KANDOR_TEST_HOST_ONLY", "leak")
+	env := []string{"PATH=/usr/bin:/bin", "KANDOR_TEST_VAR=given"}
+	check := []string{"sh", "-c", `test "$KANDOR_TEST_VAR" = given && test -z "$KANDOR_TEST_HOST_ONLY"`}
+	if code := Child(check, env); code != 0 {
+		t.Errorf("child environment was not exactly %q", env)
+	}
+}
+
 func TestChildMissingProgram(t *testing.T) {
-	if code := Child([]string{"/nonexistent/kandor-test"}); code != 127 {
+	if code := Child([]string{"/nonexistent/kandor-test"}, nil); code != 127 {
 		t.Errorf("exit code = %d, want 127", code)
 	}
 }
@@ -90,13 +101,13 @@ func TestChildDoesNotInheritFDs(t *testing.T) {
 	}
 	defer syscall.Close(fd)
 	check := []string{"sh", "-c", fmt.Sprintf("test ! -e /proc/self/fd/%d", fd)}
-	if code := Child(check); code == 0 {
+	if code := Child(check, nil); code == 0 {
 		t.Fatalf("precondition: fd %d without O_CLOEXEC should leak before MarkInheritedFDsCloseOnExec", fd)
 	}
 	if err := MarkInheritedFDsCloseOnExec(); err != nil {
 		t.Fatal(err)
 	}
-	if code := Child(check); code != 0 {
+	if code := Child(check, nil); code != 0 {
 		t.Errorf("fd %d reached the child", fd)
 	}
 }

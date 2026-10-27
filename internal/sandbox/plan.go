@@ -58,8 +58,7 @@ func (p *Plan) chmod(dest, mode string) {
 	}
 }
 
-func (p *Plan) Arg(args ...string)        { p.args = append(p.args, args...) }
-func (p *Plan) Setenv(name, value string) { p.args = append(p.args, "--setenv", name, value) }
-func (p *Plan) Args() []string            { return p.args }
-func (p *Plan) Features() Features        { return p.features }
-func (p *Plan) Mounted(dest string) bool  { return p.mounted[dest] }
+func (p *Plan) Arg(args ...string)       { p.args = append(p.args, args...) }
+func (p *Plan) Args() []string           { return p.args }
+func (p *Plan) Features() Features       { return p.features }
+func (p *Plan) Mounted(dest string) bool { return p.mounted[dest] }

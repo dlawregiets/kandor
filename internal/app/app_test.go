@@ -103,6 +103,7 @@ func TestMainDryRun(t *testing.T) {
 		t.Skip("bwrap not installed")
 	}
 	configFile(t, "[sandbox]\nnetwork = false\n")
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-kandor-test")
 	t.Setenv("KANDOR_BIN", "/usr/bin/true")
 	t.Setenv("KANDOR_HOME", t.TempDir())
 	project, _ := filepath.EvalSymlinks(t.TempDir())
@@ -111,10 +112,17 @@ func TestMainDryRun(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, errs)
 	}
-	for _, want := range []string{"bwrap ", "--ro-bind / /", "--bind " + project + " " + project, "--unshare-net",
-		"--clearenv", "-- " + bin + " --standalone --continue"} {
+	for _, want := range []string{"env -i ", "'OPENROUTER_API_KEY=<redacted>'", " bwrap --ro-bind / /",
+		"--bind " + project + " " + project, "--unshare-net", "-- " + bin + " --standalone --continue"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("dry-run output is missing %q:\n%s", want, out)
+		}
+	}
+	// Values on bwrap's command line are visible to every user through ps.
+	_, bwrapArgs, _ := strings.Cut(out, " bwrap ")
+	for _, leak := range []string{"--setenv", "--clearenv", "OPENROUTER_API_KEY"} {
+		if strings.Contains(bwrapArgs, leak) {
+			t.Errorf("bwrap's arguments contain %q:\n%s", leak, bwrapArgs)
 		}
 	}
 }
