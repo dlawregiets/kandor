@@ -20,7 +20,9 @@ import (
 	"github.com/dlawregiets/kandor/internal/sandbox"
 )
 
-const version = "0.3.0"
+// version is the wrapper version. Release builds override it with
+// -ldflags "-X github.com/dlawregiets/kandor/internal/app.version=<version>".
+var version = "0.3.0"
 
 // Main runs kandor and returns its exit status.
 func Main(args []string) int {

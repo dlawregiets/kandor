@@ -3,6 +3,7 @@ package run
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -122,8 +123,12 @@ func TestPreflightMessage(t *testing.T) {
 }
 
 func TestPreflightRuns(t *testing.T) {
-	if _, err := os.Stat("/usr/bin/bwrap"); err != nil {
+	if _, err := exec.LookPath("bwrap"); err != nil {
 		t.Skip("bwrap not installed")
+	}
+	probe := exec.Command("bwrap", "--ro-bind", "/", "/", "--unshare-user-try", "--", "/bin/true")
+	if err := probe.Run(); err != nil {
+		t.Skipf("bwrap cannot create a user namespace here: %v", err)
 	}
 	f := sandbox.Features{UnshareUserTry: true}
 	if err := Preflight(f); err != nil {

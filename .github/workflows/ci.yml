@@ -1,0 +1,102 @@
+name: CI
+
+# GitFlow: feature/fix branches are tested through pull requests, release and
+# hotfix branches are tested before they merge into main. Every branch is
+# covered, so the workflow works whether the change targets develop or main.
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Check module files
+        run: go mod tidy -diff
+
+      - name: Set up bubblewrap
+        run: |
+          if ! command -v bwrap >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y bubblewrap
+          fi
+          # Ubuntu 23.10+ restricts unprivileged user namespaces through
+          # AppArmor. A few tests run bwrap directly.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 2>/dev/null || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 2>/dev/null || true
+          if bwrap --ro-bind / / --unshare-user-try -- /bin/true; then
+            echo "bwrap can create user namespaces"
+          else
+            echo "::warning::bwrap cannot create user namespaces on this runner; tests that need it will be skipped"
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -shuffle=on -count=1 ./...
+
+  build:
+    name: Build linux/${{ matrix.arch }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          GOARCH: ${{ matrix.arch }}
+        run: make build
+
+      - name: Verify static binary
+        run: |
+          file bin/kandor
+          file bin/kandor | grep -q 'statically linked'
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: kandor-linux-${{ matrix.arch }}
+          path: bin/kandor
+          if-no-files-found: error
+          retention-days: 14
