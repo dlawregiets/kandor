@@ -188,16 +188,27 @@ check "project directories with spaces work" "[[ \$out == '$tmp/my proj' ]]"
 dry_space=$($kandor -C "$tmp/my proj" --dry-run 2>/dev/null)
 check "dry-run quotes paths with spaces" "grep -qF -- \"--bind '$tmp/my proj' '$tmp/my proj'\" <<<\"\$dry_space\""
 
-out=$( (exec 9</etc/hostname; $kandor -C "$tmp/project" --shell -- -c 'test -e /proc/self/fd/9 && echo leaked') 2>/dev/null)
-check "inherited file descriptors do not reach the sandbox" "[[ -z \$out ]]"
+out=$( (exec 9</etc/hostname; $kandor -C "$tmp/project" --shell -- -c 'if test -e /proc/self/fd/9; then echo leaked; else echo sandboxed; fi') 2>/dev/null)
+check "inherited file descriptors do not reach the sandbox" "[[ \$out == sandboxed ]]"
 
 $kandor -C "$tmp/project" --shell -- -c 'kill -TERM $$' >/dev/null 2>&1
 check "a sandbox killed by a signal gives 128+n" "[[ $? -eq 143 ]]"
 
-$kandor -C "$tmp/project" --shell -- -c 'sleep 30' >/dev/null 2>&1 &
-kpid=$!; sleep 1; kill -TERM "$kpid"; wait "$kpid"
+# SIGTERM while the sandbox runs: the sandbox stops, the shared temporary
+# profile is removed and the git audit still runs.
+mkdir -p "$tmp/sigrepo" && git -C "$tmp/sigrepo" init -q
+$kandor -C "$tmp/sigrepo" --shell -- -c 'echo ../x > .git/commondir; exec sleep 4127' >/dev/null 2>&1 &
+kpid=$!; sleep 1
+started=$(grep -lsx "$kpid" ${TMPDIR:-/tmp}/kandor-shared-$(id -u).*/pid)
+kill -TERM "$kpid"; wait "$kpid"; status=$?
+check "SIGTERM during a run exits 143" "[[ $status -eq 143 ]]"
 check "SIGTERM removes the shared temporary profile" \
-  "! grep -qsx '$kpid' ${TMPDIR:-/tmp}/kandor-shared-$(id -u).*/pid"
+  "[[ -n '$started' ]] && ! grep -qsx '$kpid' ${TMPDIR:-/tmp}/kandor-shared-$(id -u).*/pid"
+check "SIGTERM still runs the git audit" \
+  "[[ ! -e $tmp/sigrepo/.git/commondir ]] && compgen -G '$tmp/sigrepo/.git/commondir.kandor-quarantine.*' >/dev/null"
+# The kernel tears the sandbox down asynchronously once bwrap has exited.
+for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -xf 'sleep 4127' >/dev/null || break; sleep 0.2; done
+check "SIGTERM stops the sandbox" "! pgrep -xf 'sleep 4127' >/dev/null"
 
 # A signal during startup (here: while a slow git is probed) must still
 # remove the shared temporary profile.
