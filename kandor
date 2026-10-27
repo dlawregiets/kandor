@@ -10,6 +10,8 @@
 #   * /tmp, /var/tmp, /run, /run/user/$UID, /mnt, /media and /srv are private
 #   * the process gets its own PID/IPC/UTS/user/cgroup namespaces
 #   * nested user namespaces are disabled when the kernel allows it
+#   * the repository's hooks and config are read-only, so the sandbox cannot
+#     plant commands that host git runs later (--no-protect-git disables it)
 #
 # OpenCode is run with --standalone whenever the command supports it, so it
 # cannot connect to a background OpenCode service running outside the
@@ -24,9 +26,15 @@
 # Shared mode (the default) mounts the host trees read-write, so config
 # changes and logins persist.
 #
-# Requires: Linux, bubblewrap >= 0.5 (0.9+ recommended), Bash 4.3+.
+# Requires: Linux, bubblewrap >= 0.5 (0.9+ recommended), Bash 4.4+.
 #
 set -euo pipefail
+
+# Bash 4.3 treats "${empty[@]}" as unbound under set -u.
+if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4))); then
+  printf '%s: error: Bash 4.4 or newer is required\n' "${0##*/}" >&2
+  exit 1
+fi
 
 readonly PROG="${0##*/}"
 readonly VERSION="0.2.0"
@@ -83,6 +91,8 @@ Options:
       --netrc             Mount ~/.netrc read-only
       --npmrc             Mount ~/.npmrc read-only
       --no-gitconfig      Do not mount ~/.gitconfig or ~/.config/git
+      --no-protect-git    Leave the repository's hooks and config writable
+                          (needed for 'git config', 'push -u', 'remote add')
       --allow-userns      Allow nested user namespaces (needed by browsers;
                           weakens the sandbox)
       --new-session       Detach from the controlling terminal (TIOCSTI
@@ -143,6 +153,8 @@ Configuration file:
       netrc
       npmrc
       no-gitconfig
+      protect-git
+      no-protect-git
       allow-userns
       new-session
       no-new-session
@@ -182,6 +194,7 @@ allow_gitconfig=1
 allow_git_credentials=0
 allow_netrc=0
 allow_npmrc=0
+protect_git=1
 shell_mode=0
 init_config=0
 set_agent=
@@ -193,6 +206,10 @@ extra_ro=()
 extra_rw=()
 extra_env=()
 oc_args=()
+
+# Set by protect_git_dirs() and main(); checked by audit_git_dirs().
+git_audit_commondir=
+git_audit_new_repo=0
 
 # Mount destinations already planned by add_mount(); repeats are skipped.
 declare -A mounted=()
@@ -317,6 +334,8 @@ load_config() {
       netrc)            allow_netrc=1 ;;
       npmrc)            allow_npmrc=1 ;;
       no-gitconfig)     allow_gitconfig=0 ;;
+      protect-git)      protect_git=1 ;;
+      no-protect-git)   protect_git=0 ;;
       allow-userns)     allow_userns=1 ;;
       new-session)      new_session=1; new_session_explicit=1 ;;
       no-new-session)   new_session=0; new_session_explicit=1 ;;
@@ -356,6 +375,7 @@ agent $agent
 # netrc
 # npmrc
 # no-gitconfig
+# no-protect-git
 # allow-userns
 # no-new-session
 EOF
@@ -382,6 +402,12 @@ persist_agent() {
   if [[ ! -e $file ]]; then
     write_default_config "$file" "$agent"
     return 0
+  fi
+
+  # Dotfile managers often symlink the config file.  Replace the target, not
+  # the link, so the managed copy is the one that changes.
+  if [[ -L $file ]]; then
+    file=$(resolve_path "$file") || die "cannot resolve configuration file: $1"
   fi
 
   dir=${file%/*}
@@ -444,6 +470,21 @@ add_private_dir() {
   fi
 }
 
+# True for paths that would expose too much of the host: /, HOME and its
+# ancestors, the user runtime directory and top-level directories.
+is_broad_path() {
+  local p=$1
+  [[ $p == / || $p == "$HOME" || $HOME == "$p"/* ||
+     $p == "$runtime_dir" || $p == /run/user || $p == "/run/user/$uid" ||
+     $p =~ ^/[^/]+$ ]]
+}
+
+# True if a mount at PATH would cover the project directory.  Read-only mounts
+# are planned after the project's read-write bind, so they would hide it.
+contains_project() {
+  [[ $project_dir == "$1" || $project_dir == "$1"/* ]]
+}
+
 # A read-only directory mount keeps symlinks, but their targets may live
 # outside the mounted directory and would otherwise be invisible.  Mount the
 # resolved targets at their own paths as well.
@@ -455,10 +496,12 @@ add_ro_symlink_targets() {
     [[ -n $target && -e $target ]] || continue
     # Do not follow a symlink to a broad host path: it could expose the host
     # home or stack a read-only mount over the sandbox.
-    if [[ $target == / || $target == "$HOME" || $HOME == "$target"/* ||
-          $target == "$runtime_dir" || $target == /run/user ||
-          $target == "/run/user/$uid" || $target =~ ^/[^/]+$ ]]; then
+    if is_broad_path "$target"; then
       warn "not following symlink to broad host path: $link -> $target"
+      continue
+    fi
+    if contains_project "$target"; then
+      warn "not following symlink to a parent of the project: $link -> $target"
       continue
     fi
     # Mount the target at its own path so the symlink can resolve.  bwrap
@@ -504,20 +547,39 @@ is_valid_worktree_common() {
 }
 
 git_common_allowed() {
-  local common=$1 ancestor=$project_dir
+  local common=$1 top worktree
 
   case $common in
     "$project_dir"|"$project_dir"/*) return 0 ;;
   esac
 
-  # Submodules keep their git directory inside an ancestor repository's
-  # .git/modules directory.
-  while [[ $ancestor != / && $ancestor != . ]]; do
-    ancestor=$(dirname "$ancestor")
-    case $common in
-      "$ancestor"/.git|"$ancestor"/.git/*) return 0 ;;
-    esac
-  done
+  # Without a .git of its own, the project is a subdirectory of an ancestor's
+  # work tree.  Git found that repository outside the project, so the project
+  # cannot have planted it, but never expose a repository rooted at HOME or
+  # above: a dotfiles repository would put every tracked file in reach.
+  if [[ ! -e $project_dir/.git ]]; then
+    [[ $common == */.git ]] || return 1
+    top=${common%/.git}
+    [[ $project_dir == "$top"/* ]] || return 1
+    is_broad_path "$top" && return 1
+    return 0
+  fi
+
+  # A submodule's git directory lives in <superproject>/.git/modules/, and
+  # its core.worktree points back at the submodule.  The project cannot write
+  # that file, so it proves the .git file is genuine.  Reading it with --file
+  # does not run anything from the repository.
+  if [[ $common == */.git/modules/* ]]; then
+    top=${common%%/.git/modules/*}
+    [[ $project_dir == "$top"/* ]] || return 1
+    is_broad_path "$top" && return 1
+    worktree=$(git config --file "$common/config" core.worktree 2>/dev/null) ||
+      return 1
+    [[ $worktree == /* ]] || worktree=$common/$worktree
+    worktree=$(resolve_path "$worktree" 2>/dev/null) || return 1
+    [[ $worktree == "$project_dir" ]]
+    return
+  fi
 
   is_valid_worktree_common "$common"
 }
@@ -533,12 +595,11 @@ add_extra_mount() {
   p=$(resolve_path "$p") || die "$mode path cannot be resolved: $p"
   # Refuse the obvious ways to accidentally recreate the host inside the
   # sandbox.  Deliberate subdirectory and file mounts are still possible.
-  if [[ $p == / || $p == "$HOME" || $HOME == "$p"/* ||
-        $p == "$runtime_dir" || $p == /run/user || $p == "/run/user/$uid" ]]; then
-    die "refusing to mount '$p'; mount a subdirectory or file instead"
-  fi
-  if [[ $p =~ ^/[^/]+$ ]]; then
+  if [[ $p =~ ^/[^/]+$ && $p != "$HOME" ]]; then
     die "refusing to mount top-level directory '$p'; mount a subdirectory or file instead"
+  fi
+  if is_broad_path "$p"; then
+    die "refusing to mount '$p'; mount a subdirectory or file instead"
   fi
   # Do not deduplicate: a later mount of the same path (for example an --rw
   # on the command line after an ro directive in the config file) should win.
@@ -549,7 +610,67 @@ add_extra_mount() {
   fi
 }
 
+# The project's git directory is writable, but git runs hooks and commands
+# named in its config (core.fsmonitor, filters, ...) when the user later runs
+# git on the host.  Keep those read-only.  Also make every path git follows to
+# find its directories a mount point or read-only, because a mount point
+# cannot be renamed: otherwise the sandbox could move .git aside, or rewrite a
+# .git file or commondir, and swap in a repository of its own.
+protect_git_dirs() {
+  local common=$1 gitdir=$2 dotgit=$project_dir/.git
+
+  if [[ -f $dotgit ]]; then
+    add_ro "$dotgit"
+  elif [[ -d $dotgit ]]; then
+    add_rw "$dotgit"
+  fi
+  add_rw "$common"
+  [[ $gitdir == "$common" ]] || add_rw "$gitdir"
+
+  if [[ ! -d $common/hooks ]]; then
+    mkdir -p -- "$common/hooks" 2>/dev/null ||
+      warn "cannot create $common/hooks; git hooks are not protected"
+  fi
+  [[ -d $common/hooks ]] && add_ro "$common/hooks"
+  [[ -f $common/config ]] && add_ro "$common/config"
+  if [[ $gitdir != "$common" && -f $gitdir/commondir ]]; then
+    add_ro "$gitdir/commondir"
+  fi
+
+  # Git also honours a commondir file in a main git directory.  A missing file
+  # cannot be mounted read-only, so audit_git_dirs() checks for it afterwards.
+  if [[ $gitdir == "$common" && ! -e $gitdir/commondir ]]; then
+    git_audit_commondir=$gitdir/commondir
+  fi
+}
+
+# Run after the sandbox exits.  Warn about git state the sandbox could use to
+# run commands on the host the next time the user runs git.
+audit_git_dirs() {
+  local quarantine
+
+  if [[ -n $git_audit_commondir && -e $git_audit_commondir ]]; then
+    quarantine=$git_audit_commondir.kandor-quarantine.$$
+    if mv -f -- "$git_audit_commondir" "$quarantine" 2>/dev/null; then
+      warn "the sandbox created $git_audit_commondir, which redirects git to another"
+      warn "repository's config and hooks; it was moved to $quarantine"
+    else
+      warn "the sandbox created $git_audit_commondir, which redirects git to another"
+      warn "repository's config and hooks; remove it before running git there"
+    fi
+  fi
+  if (( git_audit_new_repo )) && [[ -e $project_dir/.git ]]; then
+    warn "the sandbox created a git repository in $project_dir; check .git/config"
+    warn "and .git/hooks before running git there on the host"
+  fi
+}
+
 setenv() { BWRAP+=(--setenv "$1" "$2"); }
+
+cleanup() {
+  audit_git_dirs
+  [[ -z $shared_tmp ]] || rm -rf -- "$shared_tmp"
+}
 
 # ---------------------------------------------------------------------------
 # Command line
@@ -559,32 +680,50 @@ setenv() { BWRAP+=(--setenv "$1" "$2"); }
 # path resolution happen in main() afterwards, so --help and --version can
 # short-circuit before any filesystem work.
 parse_args() {
-  local args i arg
+  local args i arg normalized invalid_agent
 
   # The configuration file is loaded before this function runs.  An explicit
   # environment value overrides it; --agent on the command line wins last.
   [[ -n ${KANDOR_AGENT:-} ]] && agent=$KANDOR_AGENT
 
   # The agent decides how positional arguments are interpreted during the main
-  # parse (early exit), so it must be resolved before that loop starts.
-  # --help and --version also stop the prescan: everything after them is
-  # ignored, including a later --agent.
+  # parse (early exit), so it must be resolved before that loop starts.  The
+  # prescan stops where the main loop hands arguments to the agent (the first
+  # positional argument, unknown option or "--"), so an agent's own --agent
+  # flag (for example "opencode run --agent plan") is never mistaken for
+  # ours.  --help and --version also stop it.
   args=("$@")
   for ((i = 0; i < ${#args[@]}; i++)); do
     arg=${args[$i]}
-    [[ $arg == -- ]] && break
     case $arg in
-      -h|--help|-V|--version) break ;;
+      -h|--help|-V|--version|--) break ;;
       --agent)
         ((i + 1 < ${#args[@]})) && agent=${args[$((i + 1))]}
+        i=$((i + 1))
         ;;
       --agent=*)
         agent=${arg#*=}
         ;;
+      -C|--dir|--project|--ro|--rw|--env|--profile|--set-agent|--set-default-agent)
+        i=$((i + 1))
+        ;;
+      --set-agent=*|--set-default-agent=*) ;;
+      --isolated|--shared|--no-seed|--net|--no-net|--ssh|--ssh-agent|\
+      --git-credentials|--netrc|--npmrc|--no-gitconfig|--protect-git|\
+      --no-protect-git|--allow-userns|--new-session|--no-new-session|--shell|\
+      --init-config|--dry-run|--print-command|--verbose) ;;
+      *) break ;;
     esac
   done
-  agent=$(normalize_agent "$agent") ||
-    die "unknown agent '$agent' (use opencode, pi or omp)"
+  # An invalid default (from KANDOR_AGENT or the config file) must not block
+  # --help, --version or --set-agent, which is how a bad default is repaired.
+  # It is reported after the main loop instead.
+  invalid_agent=
+  if ! normalized=$(normalize_agent "$agent"); then
+    invalid_agent=$agent
+    normalized=$agent
+  fi
+  agent=$normalized
 
   while (($#)); do
     case $1 in
@@ -600,11 +739,13 @@ parse_args() {
         (($# >= 2)) || die "--agent requires a name"
         agent=$(normalize_agent "$2") ||
           die "unknown agent '$2' (use opencode, pi or omp)"
+        invalid_agent=
         shift 2
         ;;
       --agent=*)
         agent=$(normalize_agent "${1#*=}") ||
           die "unknown agent '${1#*=}' (use opencode, pi or omp)"
+        invalid_agent=
         shift
         ;;
       -C|--dir|--project)
@@ -675,6 +816,14 @@ parse_args() {
         ;;
       --no-gitconfig)
         allow_gitconfig=0
+        shift
+        ;;
+      --protect-git)
+        protect_git=1
+        shift
+        ;;
+      --no-protect-git)
+        protect_git=0
         shift
         ;;
       --allow-userns)
@@ -753,6 +902,10 @@ parse_args() {
         ;;
     esac
   done
+
+  if [[ -n $invalid_agent && -z $set_agent ]]; then
+    die "unknown agent '$invalid_agent' (use opencode, pi or omp; fix it with --set-agent)"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -819,6 +972,9 @@ build_mounts() {
   # A worktree's .git file points at a per-worktree directory inside the main
   # repository's .git directory.  is_valid_worktree_common() verifies that
   # back-reference before the common directory is exposed.
+  git_dir=
+  git_common=
+  git_trusted=0
   if command -v git >/dev/null 2>&1 &&
      git_probe rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     git_common=$(git_probe rev-parse --path-format=absolute \
@@ -831,10 +987,12 @@ build_mounts() {
     if [[ -n $git_common && -e $git_common ]]; then
       git_common=$(resolve_path "$git_common") || git_common=
       case $git_common in
-        ''|"$project_dir"|"$project_dir"/*) ;;
+        '') ;;
+        "$project_dir"|"$project_dir"/*) git_trusted=1 ;;
         *)
           if git_common_allowed "$git_common"; then
             add_rw "$git_common"
+            git_trusted=1
           else
             warn "refusing to mount an untrusted git directory outside the project: $git_common"
             warn "git operations may fail; use --rw '$git_common' if you trust this repository"
@@ -842,6 +1000,14 @@ build_mounts() {
           ;;
       esac
     fi
+    if (( git_trusted )); then
+      git_dir=$(git_probe rev-parse --absolute-git-dir 2>/dev/null || true)
+      [[ -n $git_dir ]] && git_dir=$(resolve_path "$git_dir" 2>/dev/null || true)
+      [[ -n $git_dir ]] || git_dir=$git_common
+    fi
+  fi
+  if (( protect_git && git_trusted )); then
+    protect_git_dirs "$git_common" "$git_dir"
   fi
 
   # The agent's persistent state.
@@ -875,10 +1041,26 @@ build_mounts() {
 
   # The agent (or debug shell) binary and the runtime/user tool directories.
   if (( shell_mode )); then
-    add_ro "$(dirname "$shell_bin")"
+    bin_dir=$(dirname "$shell_bin")
   else
-    add_ro "$(dirname "$oc_bin")"
+    bin_dir=$(dirname "$oc_bin")
   fi
+  # Mounting a hidden directory, HOME (or an ancestor) or a parent of the
+  # project would undo the isolation above.  Other top-level directories such
+  # as /bin are already visible through the read-only root.
+  case $bin_dir in
+    /tmp|/var/tmp|/run|/mnt|/media|/srv|/root|"$home_parent")
+      bin_dir_ok=0 ;;
+    *)
+      bin_dir_ok=1 ;;
+  esac
+  if (( bin_dir_ok )) && { is_broad_path "$bin_dir" || contains_project "$bin_dir"; }; then
+    [[ $bin_dir =~ ^/[^/]+$ && $bin_dir != "$HOME" ]] || bin_dir_ok=0
+  elif (( bin_dir_ok )); then
+    add_ro "$bin_dir"
+  fi
+  (( bin_dir_ok )) ||
+    die "refusing to mount the binary's directory '$bin_dir'; move the binary into its own directory (or point KANDOR_BIN at one)"
   [[ -d $HOME/.bun ]] && add_ro "$HOME/.bun"
   for d in "$HOME/.local/bin" "$HOME/bin" "$HOME/.opencode/bin" \
            "$HOME/go/bin" "$HOME/.cargo/bin"; do
@@ -1141,6 +1323,13 @@ main() {
   # Validation and paths
   # -------------------------------------------------------------------------
 
+  # The git audit and the shared-profile cleanup also run when kandor is
+  # interrupted while the sandbox is running.
+  trap cleanup EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
   [[ -n ${HOME:-} ]] || die "HOME is not set"
   [[ -d ${HOME:-} ]] || die "HOME is not a directory: $HOME"
   HOME=$(resolve_path "$HOME") || die "cannot resolve HOME: $HOME"
@@ -1246,10 +1435,6 @@ EOF
     shared_tmp=$(mktemp -d "${TMPDIR:-/tmp}/kandor-shared-$(id -u).XXXXXX") ||
       die "cannot create a temporary shared profile"
     printf '%s\n' "$$" > "$shared_tmp/pid"
-    trap 'rm -rf -- "$shared_tmp"' EXIT
-    trap 'exit 129' HUP
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
     sandbox_xdg_config=$shared_tmp/config
     sandbox_xdg_state=$shared_tmp/state
     sandbox_xdg_cache=$shared_tmp/cache
@@ -1301,7 +1486,7 @@ EOF
             warn "could not copy $f into the shared sandbox profile"
         done
         shopt -u nullglob
-        warn "sharing the host OpenCode session database; config, state and cache use temporary copies"
+        warn "sharing the host OpenCode data directory read-write (sessions and stored logins in auth.json); config, state and cache use temporary copies"
       fi
       ;;
     pi)
@@ -1316,17 +1501,28 @@ EOF
 
         if (( seed_config )); then
           if [[ ! -e $pi_agent_dir/.kandor-seeded ]]; then
+            # Copy only known configuration and add-on entries.  Credentials
+            # (auth.json, mcp-auth.json, API keys in models.json), sessions
+            # and anything unrecognised stay on the host.
+            skipped=()
             shopt -s nullglob
             for f in "$HOME/.pi/agent"/*; do
               base=${f##*/}
               case $base in
-                # Never copy credentials or host sessions into a profile.
+                settings.json|keybindings.json|AGENTS.md|SYSTEM.md|\
+                APPEND_SYSTEM.md|extensions|skills|prompts|themes|npm|git|\
+                bin|memory) ;;
                 auth.json|mcp-auth.json|sessions) continue ;;
+                *) skipped+=("$base"); continue ;;
               esac
               cp -aL -- "$f" "$pi_agent_dir/" 2>/dev/null ||
                 warn "could not copy $f into the sandbox profile"
             done
             shopt -u nullglob
+            if ((${#skipped[@]})); then
+              warn "not copied into the Pi profile: ${skipped[*]}"
+              warn "copy them into $pi_agent_dir by hand if the profile needs them"
+            fi
             : > "$pi_agent_dir/.kandor-seeded" 2>/dev/null || true
           fi
         fi
@@ -1334,7 +1530,7 @@ EOF
         pi_agent_dir=$HOME/.pi/agent
         mkdir -p -- "$pi_agent_dir" ||
           die "cannot create $pi_agent_dir for shared mode"
-        warn "sharing the entire host ~/.pi/agent read-write; sessions, settings and stored credentials are exposed to the sandbox"
+        warn "sharing the entire host ~/.pi/agent read-write; sessions, settings and stored credentials are exposed, and extensions the sandbox installs there run unsandboxed in host pi (use --isolated for untrusted work)"
       fi
       ;;
     omp)
@@ -1388,7 +1584,7 @@ EOF
         omp_root=$HOME/.omp
         mkdir -p -- "$omp_root" ||
           die "cannot create $omp_root for shared mode"
-        warn "sharing the entire host ~/.omp read-write; sessions, settings and stored credentials are exposed to the sandbox"
+        warn "sharing the entire host ~/.omp read-write; sessions, settings and stored credentials are exposed, and plugins the sandbox installs there run unsandboxed in host omp (use --isolated for untrusted work)"
       fi
       ;;
   esac
@@ -1410,6 +1606,9 @@ EOF
   fi
 
   build_mounts
+  if (( protect_git )) && [[ ! -e $project_dir/.git ]]; then
+    git_audit_new_repo=1
+  fi
 
   # Service credentials.  Both profile modes use a writable, private config and
   # state directory, so OpenCode can create and update its own service.json.
@@ -1515,8 +1714,11 @@ EOF
   (( allow_ssh_agent )) && setenv SSH_AUTH_SOCK "$(resolve_path "$SSH_AUTH_SOCK")"
 
   # Forward provider credentials, proxy settings and CA configuration.  The
-  # list is deliberately narrow: arbitrary host variables (and especially the
-  # host's OPENCODE_* service/session variables) are not inherited.
+  # list is deliberately narrow: only the prefixes of known LLM providers (and
+  # the cloud platforms that host them) are matched, so unrelated secrets such
+  # as STRIPE_SECRET_KEY stay outside.  Arbitrary host variables (and
+  # especially the host's OPENCODE_* service/session variables) are not
+  # inherited; pass anything else with --env.
   while IFS= read -r name; do
     [[ -n $name ]] || continue
     case $name in
@@ -1536,15 +1738,11 @@ EOF
         ;;
     esac
     case $name in
-      *_API_KEY|*_API_KEY_*|*_API_BASE|*_API_BASE_*|*_BASE_URL|*_AUTH_TOKEN|\
-      *_ACCESS_TOKEN|*_SECRET_KEY|*_SECRET_ACCESS_KEY|*_API_TOKEN|*_ACCESS_KEY|\
-      *_SESSION_TOKEN)
-        setenv "$name" "${!name}"
-        ;;
       OPENAI_*|ANTHROPIC_*|OPENROUTER_*|GEMINI_*|GOOGLE_*|VERTEX_*|AWS_*|\
       AZURE_*|DEEPSEEK_*|XAI_*|GROQ_*|MISTRAL_*|COHERE_*|PERPLEXITY_*|\
       TOGETHER_*|FIREWORKS_*|CEREBRAS_*|OLLAMA_*|LMSTUDIO_*|LM_STUDIO_*|\
-      HF_*|HUGGING_FACE_*|REPLICATE_*)
+      HF_*|HUGGING_FACE_*|REPLICATE_*|MOONSHOT_*|KIMI_*|ZAI_*|ZHIPU_*|\
+      MINIMAX_*|DASHSCOPE_*|LITELLM_*)
         setenv "$name" "${!name}"
         ;;
       HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|http_proxy|https_proxy|all_proxy|no_proxy)
@@ -1617,6 +1815,10 @@ EOF
             printable[$((i + 2))]='<redacted>'
             ;;
         esac
+        # URLs can carry credentials too (proxies, *_BASE_URL).
+        if [[ ${printable[$((i + 2))]} =~ ^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]+@(.*)$ ]]; then
+          printable[$((i + 2))]="${BASH_REMATCH[1]}<redacted>@${BASH_REMATCH[2]}"
+        fi
       fi
     done
     printf '%q ' "${printable[@]}"
@@ -1624,19 +1826,12 @@ EOF
     exit 0
   fi
 
-  if [[ -n $shared_tmp ]]; then
-    # Keep the shell alive so the temporary shared config/state copy can be
-    # removed when bwrap exits.
-    close_extra_fds
-    "${BWRAP[@]}" -- "${cmd[@]}"
-    status=$?
-    rm -rf -- "$shared_tmp"
-    trap - EXIT
-    exit "$status"
-  fi
-
+  # Keep the shell alive (no exec) so cleanup() can audit the git directory
+  # and remove the temporary shared config/state copy when bwrap exits.
   close_extra_fds
-  exec "${BWRAP[@]}" -- "${cmd[@]}"
+  status=0
+  "${BWRAP[@]}" -- "${cmd[@]}" || status=$?
+  exit "$status"
 }
 
 # ---------------------------------------------------------------------------

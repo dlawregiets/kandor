@@ -96,6 +96,30 @@ rc=$?
 check "parse_args: unknown agent is rejected" \
   "[[ $rc -eq 1 && \$out == *'unknown agent'* ]]"
 
+out=$(rst "parse_args -C '$tmp/proj' run --agent plan hi")
+check "parse_args: the agent's own --agent flag is passed through" \
+  "[[ \$out == 'opencode|0|default|$tmp/proj|run --agent plan hi' ]]"
+
+out=$(rst "parse_args -C '$tmp/proj' run --agent pi hi")
+check "parse_args: --agent after a subcommand does not switch agents" \
+  "[[ \$out == 'opencode|0|default|$tmp/proj|run --agent pi hi' ]]"
+
+out=$(rst "parse_args --env FOO --agent omp -C '$tmp/proj'")
+check "parse_args: --agent after a valued option is still ours" \
+  "[[ \$out == 'omp|0|default|$tmp/proj|' ]]"
+
+out=$(snippet "export KANDOR_AGENT=bogus; parse_args --help; echo \$show_help")
+check "parse_args: an invalid default agent does not block --help" "[[ \$out == 1 ]]"
+
+out=$(snippet "export KANDOR_AGENT=bogus; parse_args --set-agent pi; echo \$set_agent")
+check "parse_args: an invalid default agent can be repaired with --set-agent" \
+  "[[ \$out == pi ]]"
+
+out=$(snippet "export KANDOR_AGENT=bogus; parse_args" 2>&1)
+rc=$?
+check "parse_args: an invalid default agent is reported by name" \
+  "[[ $rc -eq 1 && \$out == *\"unknown agent 'bogus'\"* ]]"
+
 # ---------------------------------------------------------------------------
 # load_config
 # ---------------------------------------------------------------------------
@@ -140,6 +164,12 @@ check "persist_agent: replaces the agent directive" \
 check "persist_agent: preserves other directives" \
   "grep -qx 'no-net' '$generated' && grep -qx 'rw $tmp/rw' '$generated'"
 
+printf 'agent omp\n' > "$tmp/generated/real"
+ln -s "$tmp/generated/real" "$tmp/generated/link"
+snippet "persist_agent '$tmp/generated/link' pi"
+check "persist_agent: edits a symlinked config through the link" \
+  "[[ -L $tmp/generated/link ]] && grep -qx 'agent pi' '$tmp/generated/real'"
+
 missing=$tmp/generated/missing/config
 snippet "persist_agent '$missing' opencode"
 check "persist_agent: creates a missing file" \
@@ -180,6 +210,48 @@ $ro_real
 --bind
 $ro_real
 $ro_real\" ]]"
+
+# A symlink in a tool directory that points at a parent of the project would
+# stack a read-only mount over the project.
+mkdir -p "$tmp/home/.local/bin" "$tmp/work/proj"
+ln -s "$tmp/work" "$tmp/home/.local/bin/parent"
+out=$(snippet "$mh
+project_dir=$tmp/work/proj
+BWRAP=(); mounted=()
+add_ro_symlink_targets '$tmp/home/.local/bin' 2>&1
+echo \"\${#BWRAP[@]}\"")
+check "add_ro_symlink_targets: skips a parent of the project" \
+  "[[ \$out == *'parent of the project'* && \$out == *0 ]]"
+rm -rf "$tmp/home/.local/bin/parent" "$tmp/work"
+
+# git_common_allowed: a .git file pointing at a repository rooted at HOME (a
+# dotfiles repository) or at an unrelated ancestor's .git is refused.
+mkdir -p "$tmp/home/.git" "$tmp/home/code/evil" "$tmp/home/code/plain"
+printf 'gitdir: %s\n' "$tmp/home/.git" > "$tmp/home/code/evil/.git"
+out=$(snippet "$mh
+project_dir=$tmp/home/code/evil
+git_common_allowed '$tmp/home/.git' && echo allowed || echo refused")
+check "git_common_allowed: refuses an ancestor .git named by a .git file" \
+  "[[ \$out == refused ]]"
+out=$(snippet "$mh
+project_dir=$tmp/home/code/plain
+git_common_allowed '$tmp/home/.git' && echo allowed || echo refused")
+check "git_common_allowed: refuses a repository rooted at HOME" \
+  "[[ \$out == refused ]]"
+mkdir -p "$tmp/super/.git/modules/sub" "$tmp/super/sub"
+printf 'gitdir: ../.git/modules/sub\n' > "$tmp/super/sub/.git"
+git config --file "$tmp/super/.git/modules/sub/config" core.worktree ../../../sub
+out=$(snippet "$mh
+project_dir=$tmp/super/sub
+git_common_allowed '$tmp/super/.git/modules/sub' && echo allowed || echo refused")
+check "git_common_allowed: accepts a genuine submodule" "[[ \$out == allowed ]]"
+git config --file "$tmp/super/.git/modules/sub/config" core.worktree ../../../elsewhere
+out=$(snippet "$mh
+project_dir=$tmp/super/sub
+git_common_allowed '$tmp/super/.git/modules/sub' && echo allowed || echo refused")
+check "git_common_allowed: refuses a submodule whose worktree differs" \
+  "[[ \$out == refused ]]"
+rm -rf "$tmp/home/.git" "$tmp/home/code"
 
 # ---------------------------------------------------------------------------
 # build_mounts

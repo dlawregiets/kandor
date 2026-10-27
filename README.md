@@ -99,7 +99,7 @@ kandor --agent omp -C ~/code/proj -- --profile inner
 ## Requirements
 
 - Linux
-- `bash` 4.3+
+- `bash` 4.4+
 - `bubblewrap` (`bwrap`) 0.5+, 0.9+ recommended
 - Working unprivileged user namespaces, or a setuid `bwrap` installation
 - `opencode`, `pi` or `omp` in `PATH` (or set `KANDOR_BIN`)
@@ -220,8 +220,12 @@ The first time a profile is used, the host config is copied in once:
 
 - OpenCode: `~/.config/opencode` into `config/opencode` (except
   `service.json`).
-- Pi: `~/.pi/agent` into `pi/agent`, except `auth.json`, `mcp-auth.json` and
-  `sessions`.
+- Pi: from `~/.pi/agent` into `pi/agent`, only `settings.json`,
+  `keybindings.json`, `AGENTS.md`, `SYSTEM.md`, `APPEND_SYSTEM.md` and the
+  `extensions`, `skills`, `prompts`, `themes`, `npm`, `git`, `bin` and
+  `memory` directories. Credentials (`auth.json`, `mcp-auth.json`), sessions
+  and anything else (including `models.json`, which can hold API keys) stay
+  on the host; `kandor` lists what it skipped so you can copy it by hand.
 - omp: `~/.omp/agent/config.yml`, settings, commands, prompts, skills,
   themes, tools, modules and memories, plus `~/.omp/plugins`, into `omp/`.
   The credential/session databases (`agent.db`, `history.db`, `models.db`,
@@ -233,9 +237,16 @@ stored OAuth credentials. Delete the profile directory to start over, or use
 same profile and agent at the same time; use different `--profile` names
 instead.
 
-API keys from the environment (for example `OPENROUTER_API_KEY`,
-`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `AWS_*`, `AZURE_*`)
-are forwarded automatically to every agent. In an isolated profile, OAuth
+Environment variables of known LLM providers are forwarded automatically to
+every agent: those starting with `OPENAI_`, `ANTHROPIC_`, `OPENROUTER_`,
+`GEMINI_`, `GOOGLE_`, `VERTEX_`, `AWS_`, `AZURE_`, `DEEPSEEK_`, `XAI_`,
+`GROQ_`, `MISTRAL_`, `COHERE_`, `PERPLEXITY_`, `TOGETHER_`, `FIREWORKS_`,
+`CEREBRAS_`, `OLLAMA_`, `LMSTUDIO_`, `HF_`, `REPLICATE_`, `MOONSHOT_`,
+`KIMI_`, `ZAI_`, `ZHIPU_`, `MINIMAX_`, `DASHSCOPE_` or `LITELLM_`, plus
+proxy and CA settings. Note that `AWS_*`, `AZURE_*` and `GOOGLE_*` include
+cloud credentials (for Bedrock, Azure OpenAI and Vertex). Other secrets, such
+as `STRIPE_SECRET_KEY` or `GITHUB_TOKEN`, are not forwarded; pass them
+explicitly with `--env NAME` if the agent needs them. In an isolated profile, OAuth
 logins are stored in the profile; log in once per profile:
 
 ```sh
@@ -252,8 +263,9 @@ kandor --shared              # same as the default, prints a warning
 kandor --agent omp --shared
 ```
 
-For OpenCode, this shares the host's live `~/.local/share/opencode` (the
-session database). Config, state and cache are copied or created in a
+For OpenCode, this shares the host's live `~/.local/share/opencode`
+read-write: the session database and the stored provider logins in
+`auth.json`. Config, state and cache are copied or created in a
 temporary directory for the duration of the run; the host's cached `rg`
 binary is mounted read-only so OpenCode does not have to download it again.
 The host's `service.json` password and service registration stay outside the
@@ -276,6 +288,11 @@ Sharing is useful for continuing host sessions, but it is **less isolated**:
   discarded when the run exits. For Pi and omp they are written to the host
   `~/.pi/agent` / `~/.omp` trees, and the sandbox can also read the
   credentials stored there (`auth.json`, `mcp-auth.json`, `agent.db`).
+- **Code planted there runs outside the sandbox later.** For Pi and omp,
+  extensions, plugins, skills and tools that the sandbox installs into
+  `~/.pi/agent` / `~/.omp` are loaded by the agent the next time you run it
+  directly on the host, unsandboxed. A compromised sandbox in shared mode can
+  therefore persist and escape.
 - Host OpenCode must not be running a conflicting migration; SQLite WAL
   generally allows concurrent access, but avoid concurrent heavy writes.
 
@@ -303,6 +320,7 @@ Sharing is useful for continuing host sessions, but it is **less isolated**:
 | User namespaces | Nested user namespaces disabled (when supported) |
 | Capabilities | All dropped; no-new-privs |
 | Terminal | `--die-with-parent`; new session when TIOCSTI is enabled |
+| Git hooks and config | Read-only unless `--no-protect-git` (see below) |
 
 The host's OpenCode service credentials are not mounted. Isolated profiles
 write their own `service.json` with a private port, and shared mode uses a
@@ -320,7 +338,31 @@ Git worktrees and submodules work: the common git directory is mounted
 read-write only after validating the worktree's `.git` back-reference, so an
 untrusted project cannot point its `.git` file at an arbitrary host
 directory. `--rw` is available if you need to override this for a trusted
-repository.
+repository. A repository rooted at `$HOME` or above (for example a dotfiles
+repository) is never mounted.
+
+Because the project's git directory is writable, a compromised sandbox could
+otherwise plant a hook, or a `core.fsmonitor` / filter command in
+`.git/config`, that runs on the host the next time you run `git` there. By
+default `kandor` therefore:
+
+- mounts `.git/hooks` and `.git/config` read-only (creating an empty
+  `hooks` directory if the repository has none);
+- turns `.git`, a worktree's `.git` file and its per-worktree `commondir`
+  into mount points or read-only files, so they cannot be renamed or
+  rewritten to point at a repository of the sandbox's choosing;
+- after the run, moves aside a `.git/commondir` the sandbox created (git
+  would follow it to another repository's config), and warns if the sandbox
+  created a new repository in the project.
+
+This breaks git commands that write the repository config, such as
+`git config`, `git push -u`, `git remote add` and `git branch
+--set-upstream-to`. Run those on the host, or pass `--no-protect-git` for a
+trusted project. The protection does not cover hooks kept inside the project
+(`core.hooksPath` pointing at, say, `.husky/`), nested repositories the
+agent creates, or other files the host runs later (`Makefile`,
+`package.json` scripts, `.envrc`, editor tasks). Review changes to those
+before running them on the host.
 
 ### What is not isolated
 
@@ -329,7 +371,12 @@ repository.
 - **The network.** By default the sandbox shares the host network namespace.
   It can reach the internet (needed for LLM APIs), but also localhost and LAN
   services. The host OpenCode service password is not exposed in either mode;
-  other local services may be unauthenticated. Use `--no-net`
+  other local services may be unauthenticated. Sharing the network namespace
+  also shares **abstract Unix sockets**, which are not files and cannot be
+  hidden by mounts: X11 (`@/tmp/.X11-unix/X0`) and some D-Bus and input
+  method buses stay reachable. If your X server accepts local connections
+  without a cookie (for example `xhost +SI:localuser:$USER`, common with
+  Xwayland), the sandbox can send keystrokes to host windows. Use `--no-net`
   for offline work, or firewall host services if this matters.
 - **Read-only host files.** `/` is read-only and the home directory and
   common runtime/scratch directories are hidden, but readable host files in
@@ -383,6 +430,7 @@ Run `kandor --help` for the full list. Common options:
 | `--git-credentials` | Mount `~/.git-credentials` read-only |
 | `--netrc`, `--npmrc` | Mount the corresponding credential file read-only |
 | `--no-gitconfig` | Do not mount git config |
+| `--no-protect-git` | Leave the repository's hooks and config writable |
 | `--allow-userns` | Allow nested user namespaces |
 | `--new-session` / `--no-new-session` | TIOCSTI protection vs. terminal resizing |
 | `--shell` | Run a shell inside the sandbox |
@@ -417,6 +465,7 @@ git-credentials
 netrc
 npmrc
 no-gitconfig
+no-protect-git
 allow-userns
 no-new-session
 ```
@@ -498,6 +547,12 @@ bwrap --ro-bind / / --unshare-user-try -- /bin/true
 
 This is the expected result of `--disable-userns` (nested user namespaces are
 disabled). If a tool such as a browser needs them, use `--allow-userns`.
+
+### `git config` or `git push -u` fails with "Device or resource busy"
+
+The repository's `.git/config` is mounted read-only (see
+[Security model](#security-model)). Run the command on the host, or start
+`kandor` with `--no-protect-git` for a trusted project.
 
 ### Plugin install fails
 

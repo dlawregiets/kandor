@@ -72,6 +72,13 @@ secret_out=$(TEST_SECRET=supersecret $kandor --env TEST_SECRET --dry-run 2>/dev/
 check "dry-run redacts secrets" "! grep -q supersecret <<<\"\$secret_out\""
 check "dry-run marks redacted values" "grep -q 'redacted' <<<\"\$secret_out\""
 
+proxy_out=$(HTTPS_PROXY=http://user:proxypw@proxy:3128 $kandor --dry-run 2>/dev/null)
+check "dry-run redacts credentials in URLs" "! grep -q proxypw <<<\"\$proxy_out\""
+
+env_out=$(STRIPE_SECRET_KEY=x ANTHROPIC_API_KEY=y $kandor --dry-run 2>/dev/null)
+check "provider keys are forwarded" "grep -q -- '--setenv ANTHROPIC_API_KEY' <<<\"\$env_out\""
+check "unrelated secrets are not forwarded" "! grep -q STRIPE_SECRET_KEY <<<\"\$env_out\""
+
 # ---------------------------------------------------------------------------
 # Filesystem boundary
 # ---------------------------------------------------------------------------
@@ -266,6 +273,23 @@ if command -v git >/dev/null 2>&1; then
   printf 'gitdir: %s\n' "$tmp/otherrepo/.git" > "$tmp/evil/.git"
   out=$($kandor -C "$tmp/evil" --shell -- -c 'test -e "'"$tmp"'/otherrepo/s"' 2>&1)
   check "untrusted .git files cannot expose another repository" "[[ $? -ne 0 ]]"
+
+  out=$($kandor -C "$tmp/repo" --shell -- -c '
+    git commit -q --allow-empty -m inside && echo commit-ok
+    echo x > .git/hooks/pre-commit 2>/dev/null || echo hooks-ro
+    git config core.fsmonitor evil 2>/dev/null || echo config-ro
+    mv .git .git-moved 2>/dev/null || echo rename-blocked
+    echo ../x > .git/commondir' 2>&1)
+  check "git commits work with protected git" "grep -q commit-ok <<<\"\$out\""
+  check "git hooks are read-only" "grep -q hooks-ro <<<\"\$out\""
+  check "git config is read-only" "grep -q config-ro <<<\"\$out\""
+  check ".git cannot be renamed away" "grep -q rename-blocked <<<\"\$out\""
+  check "a planted commondir is quarantined" \
+    "[[ ! -e $tmp/repo/.git/commondir ]] && grep -q quarantine <<<\"\$out\""
+
+  out=$($kandor -C "$tmp/repo" --no-protect-git --shell -- -c \
+    'git config kandor.test 1 && echo config-rw' 2>&1)
+  check "--no-protect-git leaves git config writable" "grep -q config-rw <<<\"\$out\""
 fi
 
 # ---------------------------------------------------------------------------
