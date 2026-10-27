@@ -7,13 +7,13 @@ import "fmt"
 // File is the decoded configuration file.  Scalars are pointers so a key
 // that is absent can be told apart from one set to its zero value.
 type File struct {
-	Mounts      MountLists              `toml:"mounts"`
-	Env         EnvSection              `toml:"env"`
-	Sandbox     SandboxSection          `toml:"sandbox"`
-	Credentials CredentialsSection      `toml:"credentials"`
-	Git         GitSection              `toml:"git"`
-	Profile     ProfileSection          `toml:"profile"`
-	Agents      map[string]AgentSection `toml:"agents"`
+	Mounts      MountLists              `toml:"mounts,omitempty"`
+	Env         EnvSection              `toml:"env,omitempty"`
+	Sandbox     SandboxSection          `toml:"sandbox,omitempty"`
+	Credentials CredentialsSection      `toml:"credentials,omitempty"`
+	Git         GitSection              `toml:"git,omitempty"`
+	Profile     ProfileSection          `toml:"profile,omitempty"`
+	Agents      map[string]AgentSection `toml:"agents,omitempty"`
 }
 
 type MountLists struct {
@@ -54,8 +54,8 @@ type ProfileSection struct {
 // AgentSection holds the settings that apply only when one agent runs.
 type AgentSection struct {
 	Binary *string    `toml:"binary,omitempty"`
-	Mounts MountLists `toml:"mounts"`
-	Env    EnvSection `toml:"env"`
+	Mounts MountLists `toml:"mounts,omitempty"`
+	Env    EnvSection `toml:"env,omitempty"`
 }
 
 // NewSessionMode is sandbox.new_session: "auto", true or false.
