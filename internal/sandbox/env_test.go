@@ -138,37 +138,56 @@ func TestEnvAllowlistSorted(t *testing.T) {
 }
 
 func TestFormatRedactsSecrets(t *testing.T) {
-	out := FormatCommand([]string{"bwrap", "--setenv", "MY_TOKEN", "s3cret", "--setenv", "HOME", "/h"})
-	if strings.Contains(out, "s3cret") || !strings.Contains(out, "redacted") || !strings.Contains(out, "HOME /h") {
+	out := FormatCommand([]string{"MY_TOKEN=s3cret", "HOME=/h"}, []string{"bwrap", "--"})
+	if strings.Contains(out, "s3cret") || !strings.Contains(out, "MY_TOKEN=<redacted>") || !strings.Contains(out, "HOME=/h") {
 		t.Errorf("FormatCommand = %q", out)
 	}
-	out = FormatCommand([]string{"--setenv", "AWS_REGION", "eu-west-1", "--setenv", "SSH_AUTH_SOCK", "/s"})
-	if strings.Contains(out, "eu-west-1") || strings.Contains(out, " /s") {
+	out = FormatCommand([]string{"AWS_REGION=eu-west-1", "SSH_AUTH_SOCK=/s"}, nil)
+	if strings.Contains(out, "eu-west-1") || strings.Contains(out, "=/s") {
 		t.Errorf("AWS_* and SSH_AUTH_SOCK not redacted: %q", out)
 	}
 }
 
 func TestFormatRedactsURLCredentials(t *testing.T) {
-	out := FormatCommand([]string{"--setenv", "HTTPS_PROXY", "http://u:pw@p:3128"})
+	out := FormatCommand([]string{"HTTPS_PROXY=http://u:pw@p:3128"}, nil)
 	if strings.Contains(out, "pw") || !strings.Contains(out, "@p:3128") {
 		t.Errorf("FormatCommand = %q", out)
 	}
 }
 
+// The sandbox environment is shown as an "env -i" prefix, so the dry-run
+// output is still a command that reproduces the run.
+func TestFormatEnvPrefix(t *testing.T) {
+	out := FormatCommand([]string{"HOME=/h", "A=x y"}, []string{"bwrap", "--"})
+	if out != "env -i HOME=/h 'A=x y' bwrap --" {
+		t.Errorf("FormatCommand = %q", out)
+	}
+	if out := FormatCommand(nil, []string{"bwrap"}); out != "bwrap" {
+		t.Errorf("FormatCommand without environment = %q", out)
+	}
+}
+
+func TestEnvListLastWins(t *testing.T) {
+	got := EnvList([]agent.EnvVar{{Name: "A", Value: "1"}, {Name: "B", Value: "2"}, {Name: "A", Value: "3"}})
+	if !slices.Equal(got, []string{"A=3", "B=2"}) {
+		t.Errorf("EnvList = %q", got)
+	}
+}
+
 func TestFormatQuotesSpaces(t *testing.T) {
-	if out := FormatCommand([]string{"--bind", "/a b", "/a b"}); out != "--bind '/a b' '/a b'" {
+	if out := FormatCommand(nil, []string{"--bind", "/a b", "/a b"}); out != "--bind '/a b' '/a b'" {
 		t.Errorf("FormatCommand = %q", out)
 	}
-	if out := FormatCommand([]string{"it's"}); out != `'it'\''s'` {
+	if out := FormatCommand(nil, []string{"it's"}); out != `'it'\''s'` {
 		t.Errorf("FormatCommand = %q", out)
 	}
-	if out := FormatCommand([]string{""}); out != "''" {
+	if out := FormatCommand(nil, []string{""}); out != "''" {
 		t.Errorf("FormatCommand(empty) = %q", out)
 	}
 }
 
 func TestFormatPlainWordsBare(t *testing.T) {
-	if out := FormatCommand([]string{"--ro-bind", "/", "/", "--chmod", "1777", "/home/x/proj"}); out != "--ro-bind / / --chmod 1777 /home/x/proj" {
+	if out := FormatCommand(nil, []string{"--ro-bind", "/", "/", "--chmod", "1777", "/home/x/proj"}); out != "--ro-bind / / --chmod 1777 /home/x/proj" {
 		t.Errorf("FormatCommand = %q", out)
 	}
 }

@@ -200,9 +200,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return o.fail(err)
 	}
-	for _, v := range vars {
-		p.Setenv(v.Name, v.Value)
-	}
+	env := sandbox.EnvList(vars)
 
 	var cmd []string
 	if req.Shell {
@@ -235,11 +233,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 128 + int(sig)
 	}
 	if req.DryRun {
-		fmt.Fprintln(stdout, sandbox.FormatCommand(argv))
+		fmt.Fprintln(stdout, sandbox.FormatCommand(env, argv))
 		return 0
 	}
 
-	code := guard.Child(argv)
+	code := guard.Child(argv, env)
 	sandbox.Audit(mounts.Git, s.ProjectDir, o.warn)
 	return code
 }

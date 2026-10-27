@@ -21,7 +21,7 @@ func TestNamespacesDefaults(t *testing.T) {
 	args := namespaces(config.Settings{Network: true}, allFeatures, true, false)
 	want := []string{"--unshare-user", "--disable-userns", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
 		"--unshare-cgroup-try", "--hostname", "kandor", "--die-with-parent", "--cap-drop", "ALL",
-		"--chdir", "/proj", "--clearenv"}
+		"--chdir", "/proj"}
 	if !slices.Equal(args, want) {
 		t.Errorf("args = %q\nwant  %q", args, want)
 	}
