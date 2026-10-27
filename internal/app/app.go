@@ -20,9 +20,10 @@ import (
 	"github.com/dlawregiets/kandor/internal/sandbox"
 )
 
-// version is the wrapper version. Release builds override it with
+// version is the wrapper version, stamped at build time with
 // -ldflags "-X github.com/dlawregiets/kandor/internal/app.version=<version>".
-var version = "0.3.0"
+// It falls back to "dev" for plain go build and go test runs.
+var version = "dev"
 
 // Main runs kandor and returns its exit status.
 func Main(args []string) int {

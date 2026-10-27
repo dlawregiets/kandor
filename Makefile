@@ -5,13 +5,11 @@ INSTALL ?= install
 
 PROG := kandor
 
-# VERSION is stamped into the binary by release builds. Leave it empty to use
-# the version declared in internal/app/app.go.
-VERSION ?=
+# VERSION comes from the release tag, or from the nearest tag/commit recorded
+# by git for local and CI builds. Release builds pass the pushed tag explicitly.
+VERSION ?= $(shell v=$$(git describe --tags --always --dirty 2>/dev/null); v=$${v#v}; echo $${v:-dev})
 LDFLAGS ?=
-ifneq ($(VERSION),)
 LDFLAGS += -X github.com/dlawregiets/kandor/internal/app.version=$(VERSION)
-endif
 
 .PHONY: all help build install uninstall test check
 
@@ -33,7 +31,7 @@ help:
 	  '  PREFIX     Installation prefix [default: ~/.local]' \
 	  '  BINDIR     Binary directory [default: $$(PREFIX)/bin]' \
 	  '  DESTDIR    Staging root for package builds [default: empty]' \
-	  '  VERSION    Version to stamp into the binary [default: internal/app/app.go]'
+	  '  VERSION    Version to stamp into the binary [default: git describe]'
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(PROG) ./cmd/kandor

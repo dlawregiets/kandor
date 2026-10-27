@@ -44,12 +44,6 @@ jobs:
             exit 1
           fi
 
-          source_version=$(sed -n 's/^var version = "\([^"]*\)"/\1/p' internal/app/app.go)
-          if [[ "$source_version" != "$version" ]]; then
-            echo "::error::internal/app/app.go declares '$source_version' but the tag is '$TAG'; bump the version on the release branch first"
-            exit 1
-          fi
-
           git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
           branches=$(git branch -r --contains "$(git rev-parse 'HEAD^{commit}')" | sed 's/^[[:space:]]*//')
           if [[ "${version%%+*}" == *-* ]]; then
