@@ -51,6 +51,32 @@ func TestConvertLegacy(t *testing.T) {
 	}
 }
 
+// The old format applied directives in order: a later "profile" isolated the
+// run even after "shared", and a later "shared" undid an earlier "profile".
+func TestConvertLegacyProfileOrder(t *testing.T) {
+	isolated := func(content string) bool {
+		t.Helper()
+		f, err := ConvertLegacy([]byte(content))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := Merge(f, Overrides{}, "opencode", "/h", "/cwd", env(nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s.Isolated
+	}
+	if !isolated("shared\nprofile work\n") {
+		t.Error(`"shared" then "profile work" migrated to shared mode`)
+	}
+	if isolated("profile work\nshared\n") {
+		t.Error(`"profile work" then "shared" migrated to an isolated profile`)
+	}
+	if !isolated("isolated\nprofile work\n") {
+		t.Error(`"isolated" then "profile work" is not isolated`)
+	}
+}
+
 func TestConvertLegacyOtherAgent(t *testing.T) {
 	_, err := ConvertLegacy([]byte("agent omp\n"))
 	if err == nil || !strings.Contains(err.Error(), "only opencode is supported") {
