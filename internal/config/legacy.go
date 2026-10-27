@@ -35,6 +35,9 @@ var legacyDirectives = map[string]func(f *File, rest string) error{
 	"no-new-session":  legacySession(SessionOff),
 	"profile": func(f *File, r string) error {
 		f.Profile.Name = &r
+		// The old format applied directives in order, so "profile" isolated
+		// the run even after "shared".  The name implies isolated = true.
+		f.Profile.Isolated = nil
 		return nil
 	},
 	"agent": func(f *File, r string) error {
