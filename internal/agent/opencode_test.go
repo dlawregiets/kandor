@@ -94,7 +94,8 @@ func newFixture(t *testing.T, isolated bool) *fixture {
 		Config: filepath.Join(root, "sb/config"), Data: filepath.Join(root, "sb/data"),
 		State: filepath.Join(root, "sb/state"), Cache: filepath.Join(root, "sb/cache"),
 		HostConfig: filepath.Join(root, "host/config"), HostData: filepath.Join(root, "host/data"),
-		HostCache: filepath.Join(root, "host/cache"), Isolated: isolated, Seed: true,
+		HostState: filepath.Join(root, "host/state"), HostCache: filepath.Join(root, "host/cache"),
+		Isolated: isolated, Seed: true,
 	}
 	hostOC := filepath.Join(l.HostConfig, "opencode")
 	os.MkdirAll(filepath.Join(hostOC, "plugins"), 0o755)
@@ -194,5 +195,66 @@ func TestPrepareBinds(t *testing.T) {
 	os.MkdirAll(filepath.Join(iso.layout.HostCache, "opencode", "bin"), 0o755)
 	if st := iso.prepare(t); len(st.Binds) != 4 {
 		t.Errorf("isolated binds = %+v, want only the four state directories", st.Binds)
+	}
+}
+
+// The host's service.json files hold the host service's password and URL;
+// the sandbox must never see them through a mount of their directories.
+func TestPrepareMasksHostServiceFiles(t *testing.T) {
+	for _, isolated := range []bool{false, true} {
+		f := newFixture(t, isolated)
+		st := f.prepare(t)
+		for _, want := range []Mask{
+			{Src: filepath.Join(f.layout.Config, "opencode", "service.json"),
+				Dest: filepath.Join(f.layout.HostConfig, "opencode", "service.json"), Placeholder: "{}\n"},
+			{Src: filepath.Join(f.layout.State, "opencode", "service.json"),
+				Dest: filepath.Join(f.layout.HostState, "opencode", "service.json"), Placeholder: "{}\n"},
+		} {
+			if !slices.Contains(st.Masks, want) {
+				t.Errorf("isolated=%v: no mask %+v in %+v", isolated, want, st.Masks)
+			}
+		}
+	}
+}
+
+// In shared mode, a host OpenCode directory mounted read-write is used
+// directly, so OpenCode's writes reach the host.
+func TestPrepareSharedWriteThrough(t *testing.T) {
+	f := newFixture(t, false)
+	hostOC := filepath.Join(f.layout.HostConfig, "opencode")
+	f.layout.Writable = func(p string) bool { return p == hostOC }
+	st := f.prepare(t)
+	if !slices.Contains(st.Binds, Bind{Src: hostOC, Dest: hostOC, Writable: true}) {
+		t.Errorf("host config not bound read-write: %+v", st.Binds)
+	}
+	tmpOC := filepath.Join(f.layout.Config, "opencode")
+	if slices.ContainsFunc(st.Binds, func(b Bind) bool { return b.Dest == tmpOC }) {
+		t.Errorf("temporary config still bound: %+v", st.Binds)
+	}
+	if !slices.Contains(st.Env, EnvVar{"XDG_CONFIG_HOME", f.layout.HostConfig}) {
+		t.Errorf("XDG_CONFIG_HOME not pointed at the host: %+v", st.Env)
+	}
+	if _, err := os.Stat(filepath.Join(tmpOC, "opencode.json")); err == nil {
+		t.Error("host config was copied although it is used directly")
+	}
+	if slices.ContainsFunc(st.Env, func(v EnvVar) bool { return v.Name == "XDG_STATE_HOME" }) {
+		t.Errorf("state directory redirected without a mount: %+v", st.Env)
+	}
+	if !slices.ContainsFunc(f.warns, func(w string) bool { return strings.Contains(w, hostOC) }) ||
+		!slices.ContainsFunc(f.warns, func(w string) bool { return strings.HasSuffix(w, "; state, cache use temporary copies") }) {
+		t.Errorf("warnings = %q", f.warns)
+	}
+}
+
+func TestPrepareIsolatedIgnoresWritable(t *testing.T) {
+	f := newFixture(t, true)
+	hostOC := filepath.Join(f.layout.HostConfig, "opencode")
+	f.layout.Writable = func(p string) bool { return p == hostOC }
+	st := f.prepare(t)
+	if len(st.Binds) != 4 || slices.ContainsFunc(st.Env, func(v EnvVar) bool { return v.Name == "XDG_CONFIG_HOME" }) {
+		t.Errorf("isolated profile used the host config: %+v %+v", st.Binds, st.Env)
+	}
+	if !slices.ContainsFunc(f.warns, func(w string) bool { return strings.Contains(w, "isolated profile") }) {
+		t.Errorf("warnings = %q", f.warns)
 	}
 }

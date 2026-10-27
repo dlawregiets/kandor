@@ -3,13 +3,23 @@
 // (and creating an empty .git/hooks directory to protect it).
 package sandbox
 
-import "os"
+import (
+	"os"
+	"strings"
+)
 
 // Plan accumulates bwrap arguments (without the leading "bwrap").
 type Plan struct {
 	features Features
 	args     []string
 	mounted  map[string]bool
+	layers   []layer
+}
+
+// layer records what a mount makes visible at dest, for Visible.
+type layer struct {
+	dest              string
+	visible, writable bool
 }
 
 func NewPlan(f Features) *Plan {
@@ -26,6 +36,7 @@ func (p *Plan) once(kind, src, dest string) {
 	}
 	p.mounted[dest] = true
 	p.args = append(p.args, kind, src, dest)
+	p.layers = append(p.layers, layer{dest, true, kind == "--bind"})
 }
 
 // Bind always adds the mount, so a later mount of the same path wins.
@@ -35,6 +46,7 @@ func (p *Plan) Bind(src, dest string, writable bool) {
 		kind = "--bind"
 	}
 	p.args = append(p.args, kind, src, dest)
+	p.layers = append(p.layers, layer{dest, true, writable})
 }
 
 // Tmpfs hides dest behind an empty tmpfs.  Missing paths are skipped.
@@ -43,13 +55,27 @@ func (p *Plan) Tmpfs(dest, mode string) {
 		return
 	}
 	p.args = append(p.args, "--tmpfs", dest)
+	p.layers = append(p.layers, layer{dest: dest})
 	p.chmod(dest, mode)
 }
 
 // PrivateDir creates dest and puts an empty tmpfs on it.
 func (p *Plan) PrivateDir(dest, mode string) {
 	p.args = append(p.args, "--dir", dest, "--tmpfs", dest)
+	p.layers = append(p.layers, layer{dest: dest})
 	p.chmod(dest, mode)
+}
+
+// Visible reports whether the host file at path shows through the planned
+// mounts (the last mount that contains it decides), and whether it is
+// writable there.
+func (p *Plan) Visible(path string) (visible, writable bool) {
+	for i := len(p.layers) - 1; i >= 0; i-- {
+		if l := p.layers[i]; l.dest == "/" || path == l.dest || strings.HasPrefix(path, l.dest+"/") {
+			return l.visible, l.writable
+		}
+	}
+	return false, false
 }
 
 func (p *Plan) chmod(dest, mode string) {

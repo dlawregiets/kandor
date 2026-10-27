@@ -184,6 +184,20 @@ check "--agent is passed to OpenCode" \
 # Process handling and unusual inputs
 # ---------------------------------------------------------------------------
 mkdir -p "$tmp/my proj"
+# A read-write mount of the host's OpenCode config directory is used
+# directly, but the host service's password never reaches the sandbox.
+xdg=$tmp/xdg-config
+mkdir -p "$xdg/opencode"
+printf '{"password":"smoke-host-pw"}\n' > "$xdg/opencode/service.json"
+out=$(XDG_CONFIG_HOME=$xdg $kandor -C "$tmp/project" --rw "$xdg/opencode" --shell -- -c \
+  'echo written > "$XDG_CONFIG_HOME/opencode/from-sandbox"; cat "$XDG_CONFIG_HOME/opencode/service.json" "'"$xdg"'/opencode/service.json"' 2>/dev/null)
+check "writes to a read-write OpenCode config reach the host" "[[ -f $xdg/opencode/from-sandbox ]]"
+check "the host service password is hidden" "! grep -q smoke-host-pw <<<\"\$out\""
+check "the host service.json is unchanged" "grep -q smoke-host-pw $xdg/opencode/service.json"
+out=$(XDG_CONFIG_HOME=$xdg $kandor -C "$tmp/project" --ro "$xdg" --shell -- -c \
+  'cat "'"$xdg"'/opencode/service.json"' 2>/dev/null)
+check "the host service password is hidden under a read-only parent mount" "! grep -q smoke-host-pw <<<\"\$out\""
+
 # Variables travel in bwrap's environment, which only this user can read,
 # not on its command line, which every user can read through ps.
 out=$(OPENROUTER_API_KEY=smoke-or-key KANDOR_HOST_ONLY=x $kandor -C "$tmp/project" --shell -- -c \

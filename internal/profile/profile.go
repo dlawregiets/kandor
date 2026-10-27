@@ -29,7 +29,7 @@ type XDG struct {
 // session database; the temporary directory is removed by cleanup.
 func Setup(s config.Settings, host XDG, kandorHome, tmpdir string, uid int) (agent.Layout, func(), error) {
 	l := agent.Layout{
-		HostConfig: host.Config, HostData: host.Data, HostCache: host.Cache,
+		HostConfig: host.Config, HostData: host.Data, HostState: host.State, HostCache: host.Cache,
 		Isolated: s.Isolated, Seed: s.Seed,
 	}
 	if s.Isolated {

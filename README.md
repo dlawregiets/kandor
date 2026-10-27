@@ -180,7 +180,15 @@ read-write: the session database and the stored provider logins in
 temporary directory for the duration of the run; the host's cached `rg`
 binary is mounted read-only so OpenCode does not have to download it again.
 The host's `service.json` password and service registration stay outside the
-sandbox.
+sandbox, even when a mount includes their directories: kandor covers them
+with the sandbox's private copies.
+
+To keep OpenCode's config changes (models, plugins, agents), mount the host
+directory read-write, for example `--rw ~/.config/opencode` or
+`read_write = ["~/.config/opencode"]` under `[mounts]`. OpenCode then uses that
+directory directly instead of a temporary copy. The same works for
+`~/.local/state/opencode` and `~/.cache/opencode`. An isolated profile always
+uses its own copy.
 
 Sharing is useful for continuing host sessions, but it is **less isolated**:
 
@@ -527,8 +535,8 @@ kandor --new-session      # TIOCSTI protection, resize may not work
 ### Shared mode changed my host state
 
 Shared mode (the default) is deliberately read-write for host state.
-Config, state and cache are temporary copies, so config/plugin changes are
-discarded, but sessions and stored logins in the host data directory can be
+Config, state and cache are temporary copies unless you mount them
+read-write, so config/plugin changes are discarded, but sessions and stored logins in the host data directory can be
 modified. Use `--isolated` for untrusted work.
 
 ## Uninstall

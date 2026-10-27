@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/dlawregiets/kandor/internal/config"
 )
 
 func call(t *testing.T, args ...string) (int, string, string) {
@@ -124,5 +126,23 @@ func TestMainDryRun(t *testing.T) {
 		if strings.Contains(bwrapArgs, leak) {
 			t.Errorf("bwrap's arguments contain %q:\n%s", leak, bwrapArgs)
 		}
+	}
+}
+
+func TestWritableMounts(t *testing.T) {
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	a, b, link := filepath.Join(dir, "a"), filepath.Join(dir, "b"), filepath.Join(dir, "link")
+	os.Mkdir(a, 0o755)
+	os.Mkdir(b, 0o755)
+	os.Symlink(a, link)
+	w := writableMounts([]config.MountSpec{{Path: link, Writable: true}, {Path: b, Writable: true}, {Path: b}})
+	if !w(a) || !w(link) {
+		t.Error("a read-write mount (given through a symlink) is not writable")
+	}
+	if w(b) {
+		t.Error("a later read-only mount of the same path did not win")
+	}
+	if w(filepath.Join(dir, "missing")) {
+		t.Error("an unmounted path is writable")
 	}
 }
