@@ -293,3 +293,74 @@ func TestMountsSSHAgent(t *testing.T) {
 		t.Errorf("SSHAuthSock = %q, warnings = %q", r.SSHAuthSock, e.warns)
 	}
 }
+
+// maskEnv has a host service.json under HOME and a private replacement.
+func maskEnv(t *testing.T) (e *env, dir, secret, private string) {
+	e = newEnv(t)
+	dir = filepath.Join(e.home, ".config", "opencode")
+	os.MkdirAll(dir, 0o755)
+	secret = filepath.Join(dir, "service.json")
+	os.WriteFile(secret, []byte(`{"password":"host"}`), 0o600)
+	private = filepath.Join(filepath.Dir(e.home), "private.json")
+	os.WriteFile(private, []byte("{}\n"), 0o600)
+	e.in.AgentMasks = []agent.Mask{{Src: private, Dest: secret, Placeholder: "{}\n"}}
+	return e, dir, secret, private
+}
+
+func TestMaskCoversMountedFile(t *testing.T) {
+	for _, writable := range []bool{false, true} {
+		e, dir, secret, private := maskEnv(t)
+		e.in.Settings.Mounts = []config.MountSpec{{Path: dir, Writable: writable}}
+		args, _ := e.build(t)
+		kind := map[bool]string{false: "--ro-bind", true: "--bind"}[writable]
+		mount, mask := indexSeq(args, kind, dir, dir), indexSeq(args, "--bind", private, secret)
+		if mount < 0 || mask < mount {
+			t.Errorf("writable=%v: mask missing or before the mount: %q", writable, args)
+		}
+	}
+}
+
+func TestMaskCoversParentMount(t *testing.T) {
+	e, _, secret, private := maskEnv(t)
+	e.in.Settings.Mounts = []config.MountSpec{{Path: filepath.Join(e.home, ".config")}}
+	if args, _ := e.build(t); !hasSeq(args, "--bind", private, secret) {
+		t.Errorf("mask missing under a parent mount: %q", args)
+	}
+}
+
+func TestMaskSkipsHiddenFile(t *testing.T) {
+	e, _, secret, _ := maskEnv(t)
+	if args, _ := e.build(t); slices.Contains(args, secret) {
+		t.Errorf("masked a file the sandbox cannot see: %q", args)
+	}
+}
+
+// A missing file in a writable directory would let the sandbox create it,
+// so a placeholder is created and masked; a read-only directory needs none.
+func TestMaskPlaceholder(t *testing.T) {
+	e, dir, secret, private := maskEnv(t)
+	os.Remove(secret)
+	e.in.Settings.Mounts = []config.MountSpec{{Path: dir}}
+	if args, _ := e.build(t); slices.Contains(args, secret) || exists(secret) {
+		t.Errorf("read-only directory: placeholder or mask added: %q", args)
+	}
+	e.in.Settings.Mounts = []config.MountSpec{{Path: dir, Writable: true}}
+	args, _ := e.build(t)
+	if data, _ := os.ReadFile(secret); string(data) != "{}\n" || !hasSeq(args, "--bind", private, secret) {
+		t.Errorf("writable directory: placeholder %q, args %q", data, args)
+	}
+}
+
+// Mounts use resolved paths, so the mask must cover the resolved path of a
+// symlinked directory too.
+func TestMaskResolvesSymlinks(t *testing.T) {
+	e, dir, _, private := maskEnv(t)
+	real := filepath.Join(e.home, "dotfiles", "opencode")
+	os.MkdirAll(filepath.Dir(real), 0o755)
+	os.Rename(dir, real)
+	os.Symlink(real, dir)
+	e.in.Settings.Mounts = []config.MountSpec{{Path: dir}}
+	if args, _ := e.build(t); !hasSeq(args, "--bind", private, filepath.Join(real, "service.json")) {
+		t.Errorf("mask missing at the resolved path: %q", args)
+	}
+}

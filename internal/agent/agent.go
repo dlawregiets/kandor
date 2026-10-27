@@ -12,6 +12,14 @@ type Bind struct {
 	FollowSymlinks bool
 }
 
+// Mask hides a host file behind Src wherever a mount makes Dest visible in
+// the sandbox.  If Dest is missing in a writable directory, Placeholder is
+// written there first, so the sandbox cannot create the file itself.
+type Mask struct {
+	Src, Dest   string
+	Placeholder string
+}
+
 // EnvVar is one variable set inside the sandbox.
 type EnvVar struct {
 	Name, Value string
@@ -19,17 +27,22 @@ type EnvVar struct {
 
 // Layout is where the sandbox's XDG directories live, plus the host's.
 type Layout struct {
-	Config, Data, State, Cache      string
-	HostConfig, HostData, HostCache string
-	Isolated, Seed                  bool
+	Config, Data, State, Cache                 string
+	HostConfig, HostData, HostState, HostCache string
+	Isolated, Seed                             bool
 	// ProfileRoot is the isolated profile's directory ("" in shared mode).
 	ProfileRoot string
+	// Writable reports whether a host path is explicitly mounted read-write
+	// (nil means none is).
+	Writable func(path string) bool
 }
 
 // State is what an agent needs from the sandbox after Prepare.
 type State struct {
 	Binds []Bind
+	// Env is set after the XDG variables, so it can override them.
 	Env   []EnvVar
+	Masks []Mask
 }
 
 // Agent is a coding agent kandor can run.

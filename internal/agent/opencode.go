@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 )
 
 // OpenCode is https://opencode.ai.
@@ -108,7 +109,9 @@ func (opencode) Command(bin string, args []string) ([]string, error) {
 
 // Prepare creates OpenCode's config/data/state/cache directories, copies the
 // host config in (once for an isolated profile, every run in shared mode,
-// never the host's service.json) and writes a private service.json.
+// never the host's service.json) and writes a private service.json.  In
+// shared mode, a host config, state or cache directory mounted read-write is
+// used directly instead of a temporary copy, so OpenCode's writes reach it.
 func (opencode) Prepare(l Layout, warn func(string)) (State, error) {
 	dirs := []string{l.Config, l.Data, l.State, l.Cache}
 	for i, d := range dirs {
@@ -117,7 +120,30 @@ func (opencode) Prepare(l Layout, warn func(string)) (State, error) {
 			return State{}, fmt.Errorf("cannot create OpenCode's config/data/state/cache directories")
 		}
 	}
-	configDir, stateDir := dirs[0], dirs[2]
+	configDir, stateDir, cacheDir := dirs[0], dirs[2], dirs[3]
+	st := State{Env: []EnvVar{{"OPENCODE_DISABLE_AUTOUPDATE", "1"}}}
+
+	// Host directories used directly, by index into dirs.
+	direct := map[int]bool{}
+	for i, x := range []struct{ host, env string }{
+		0: {l.HostConfig, "XDG_CONFIG_HOME"}, 2: {l.HostState, "XDG_STATE_HOME"}, 3: {l.HostCache, "XDG_CACHE_HOME"},
+	} {
+		if x.host == "" || l.Writable == nil {
+			continue
+		}
+		host := filepath.Join(x.host, "opencode")
+		if !l.Writable(host) {
+			continue
+		}
+		if l.Isolated {
+			warn(fmt.Sprintf("%s is mounted read-write, but OpenCode uses the isolated profile's copy", host))
+			continue
+		}
+		direct[i] = true
+		st.Binds = append(st.Binds, Bind{Src: host, Dest: host, Writable: true})
+		st.Env = append(st.Env, EnvVar{x.env, x.host})
+		warn(fmt.Sprintf("OpenCode writes directly to %s, which is mounted read-write", host))
+	}
 
 	hostConfig := filepath.Join(l.HostConfig, "opencode")
 	switch {
@@ -128,20 +154,40 @@ func (opencode) Prepare(l Layout, warn func(string)) (State, error) {
 			os.WriteFile(marker, nil, 0o644)
 		}
 	case !l.Isolated:
-		copyConfig(hostConfig, configDir, "shared sandbox profile", warn)
-		warn("sharing the host OpenCode data directory read-write (sessions and stored logins in auth.json); config, state and cache use temporary copies")
+		if !direct[0] {
+			copyConfig(hostConfig, configDir, "shared sandbox profile", warn)
+		}
+		var copies []string
+		for i, name := range []string{0: "config", 2: "state", 3: "cache"} {
+			if name != "" && !direct[i] {
+				copies = append(copies, name)
+			}
+		}
+		msg := "sharing the host OpenCode data directory read-write (sessions and stored logins in auth.json)"
+		if len(copies) > 0 {
+			msg += "; " + strings.Join(copies, ", ") + " use temporary copies"
+		}
+		warn(msg)
 	}
 
 	writeServiceFiles(configDir, stateDir, warn)
+	// The host's service files hold its service's password and URL.  With
+	// them, a sandbox sharing the network could drive the host service,
+	// which runs commands outside the sandbox.
+	st.Masks = []Mask{
+		{Src: filepath.Join(configDir, "service.json"), Dest: filepath.Join(hostConfig, "service.json"), Placeholder: "{}\n"},
+		{Src: filepath.Join(stateDir, "service.json"), Dest: filepath.Join(l.HostState, "opencode", "service.json"), Placeholder: "{}\n"},
+	}
 
-	st := State{Env: []EnvVar{{"OPENCODE_DISABLE_AUTOUPDATE", "1"}}}
-	for _, d := range dirs {
-		st.Binds = append(st.Binds, Bind{Src: d, Dest: d, Writable: true})
+	for i, d := range dirs {
+		if !direct[i] {
+			st.Binds = append(st.Binds, Bind{Src: d, Dest: d, Writable: true})
+		}
 	}
 	// Reuse the host's cached ripgrep binary without exposing the host cache
 	// (and its npm packages) read-write.
-	if hostBin := filepath.Join(l.HostCache, "opencode", "bin"); !l.Isolated && isDir(hostBin) {
-		st.Binds = append(st.Binds, Bind{Src: hostBin, Dest: filepath.Join(dirs[3], "bin"), FollowSymlinks: true})
+	if hostBin := filepath.Join(l.HostCache, "opencode", "bin"); !l.Isolated && !direct[3] && isDir(hostBin) {
+		st.Binds = append(st.Binds, Bind{Src: hostBin, Dest: filepath.Join(cacheDir, "bin"), FollowSymlinks: true})
 	}
 	return st, nil
 }

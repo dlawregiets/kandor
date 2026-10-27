@@ -18,6 +18,7 @@ type Input struct {
 	Host       paths.Host
 	Features   Features
 	AgentBinds []agent.Bind
+	AgentMasks []agent.Mask
 	// Binary is the resolved agent (or debug shell) executable.
 	Binary    string
 	XDGConfig string
@@ -51,7 +52,8 @@ func BuildMounts(p *Plan, in Input) (Result, error) {
 	s, h := in.Settings, in.Host
 	home, project := h.Home, s.ProjectDir
 
-	p.Arg("--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc")
+	p.Bind("/", "/", false)
+	p.Arg("--dev", "/dev", "--proc", "/proc")
 
 	// Hide the home directory.  bwrap resolves mount sources before applying
 	// mounts, so binding paths below HOME afterwards still works.
@@ -221,7 +223,49 @@ func BuildMounts(p *Plan, in Input) (Result, error) {
 			return Result{}, err
 		}
 	}
+
+	// Last, so no mount above can uncover them.
+	for _, m := range in.AgentMasks {
+		if err := mask(p, m); err != nil {
+			return Result{}, err
+		}
+	}
 	return r, nil
+}
+
+// mask covers m.Dest with m.Src wherever the planned mounts make it visible:
+// at its own path and at its resolved path, which is where extra mounts put
+// a symlinked directory.
+func mask(p *Plan, m agent.Mask) error {
+	dests := []string{m.Dest}
+	if dir, err := paths.Resolve(filepath.Dir(m.Dest)); err == nil {
+		if resolved := filepath.Join(dir, filepath.Base(m.Dest)); resolved != m.Dest {
+			dests = append(dests, resolved)
+		}
+	}
+	for _, dest := range dests {
+		visible, writable := p.Visible(dest)
+		if !visible {
+			continue
+		}
+		if _, err := os.Lstat(dest); err != nil {
+			if !writable {
+				continue
+			}
+			f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+			if err == nil {
+				_, err = f.WriteString(m.Placeholder)
+				if cerr := f.Close(); err == nil {
+					err = cerr
+				}
+			}
+			if err != nil {
+				return fmt.Errorf("cannot create %s to keep the sandbox from writing it: %v", dest, err)
+			}
+		}
+		p.Bind(m.Src, dest, true)
+	}
+	return nil
 }
 
 // mountBinaryDir mounts the directory holding the agent or shell binary.

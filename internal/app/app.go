@@ -144,6 +144,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return o.fail(err)
 	}
 	defer cleanup()
+	layout.Writable = writableMounts(s.Mounts)
 	state, err := ag.Prepare(layout, o.warn)
 	if err != nil {
 		return o.fail(err)
@@ -170,6 +171,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Host:       paths.Host{Home: home, RuntimeDir: runtimeDir, UID: uid},
 		Features:   features,
 		AgentBinds: state.Binds,
+		AgentMasks: state.Masks,
 		Binary:     binary,
 		XDGConfig:  host.Config,
 		Getenv:     os.Getenv,
@@ -240,6 +242,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 	code := guard.Child(argv, env)
 	sandbox.Audit(mounts.Git, s.ProjectDir, o.warn)
 	return code
+}
+
+// writableMounts reports whether a path is an extra mount that ends up
+// read-write (the last mount of a path wins).  Paths are compared resolved.
+func writableMounts(mounts []config.MountSpec) func(string) bool {
+	rw := map[string]bool{}
+	for _, m := range mounts {
+		if resolved, err := paths.Resolve(m.Path); err == nil {
+			rw[resolved] = m.Writable
+		}
+	}
+	return func(p string) bool {
+		resolved, err := paths.Resolve(p)
+		return err == nil && rw[resolved]
+	}
 }
 
 func validHome(home string) (string, error) {
