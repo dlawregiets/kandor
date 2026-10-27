@@ -44,8 +44,9 @@ func (e *LegacyError) Error() string {
 
 // CheckLegacy reports an old-format file at the standard location when the
 // TOML file does not exist yet, so its settings are not silently ignored.
+// With KANDOR_CONFIG set, only that file matters.
 func CheckLegacy(loc Locations) error {
-	if exists(loc.TOML) || !exists(loc.Legacy) {
+	if loc.Explicit || exists(loc.TOML) || !exists(loc.Legacy) {
 		return nil
 	}
 	return &LegacyError{Path: loc.Legacy}

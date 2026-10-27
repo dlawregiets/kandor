@@ -198,6 +198,11 @@ func TestCheckLegacy(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "kandor --migrate-config") {
 		t.Errorf("message = %q", err)
 	}
+	explicit := loc
+	explicit.TOML, explicit.Explicit = filepath.Join(dir, "chosen.toml"), true
+	if err := CheckLegacy(explicit); err != nil {
+		t.Errorf("KANDOR_CONFIG set: %v, want nil (the default old file is irrelevant)", err)
+	}
 	if err := os.WriteFile(loc.TOML, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}

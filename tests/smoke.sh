@@ -8,7 +8,7 @@ set -uo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 root=$(cd -- "$here/.." && pwd)
-kandor=$root/kandor
+kandor=$root/bin/kandor
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/kandor-test.XXXXXX")
 trap 'rm -rf -- "$tmp"' EXIT
@@ -23,7 +23,7 @@ bad()  { fail=$((fail + 1)); printf 'FAIL %s\n' "$1"; }
 check(){ if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
 command -v bwrap >/dev/null 2>&1 || { echo "bwrap not installed" >&2; exit 1; }
-[[ -x $kandor ]] || { echo "missing $kandor" >&2; exit 1; }
+[[ -x $kandor ]] || { echo "missing $kandor; run make build first" >&2; exit 1; }
 command -v opencode >/dev/null 2>&1 || { echo "opencode not installed" >&2; exit 1; }
 
 # A project plus a secret outside it.  Both live under the private /tmp, so
@@ -172,12 +172,36 @@ check "isolated profile does not use the host data directory" \
 # ---------------------------------------------------------------------------
 printf 'agent omp\n' > "$tmp/omp-config"
 out=$(KANDOR_CONFIG=$tmp/omp-config $kandor --dry-run 2>&1)
-check "a config selecting another agent is rejected" \
-  "grep -q 'only opencode is supported' <<<\"\$out\""
+check "an old-format config file is reported" \
+  "grep -q 'old configuration format' <<<\"\$out\""
 
 dry_agent=$($kandor -C "$tmp/project" --dry-run --agent plan 2>/dev/null)
 check "--agent is passed to OpenCode" \
   "grep -q -- '--standalone --agent plan' <<<\"\$dry_agent\""
+
+# ---------------------------------------------------------------------------
+# Process handling and unusual inputs
+# ---------------------------------------------------------------------------
+mkdir -p "$tmp/my proj"
+out=$($kandor -C "$tmp/my proj" --shell -- -c 'pwd' 2>/dev/null)
+check "project directories with spaces work" "[[ \$out == '$tmp/my proj' ]]"
+dry_space=$($kandor -C "$tmp/my proj" --dry-run 2>/dev/null)
+check "dry-run quotes paths with spaces" "grep -qF -- \"--bind '$tmp/my proj' '$tmp/my proj'\" <<<\"\$dry_space\""
+
+out=$( (exec 9</etc/hostname; $kandor -C "$tmp/project" --shell -- -c 'test -e /proc/self/fd/9 && echo leaked') 2>/dev/null)
+check "inherited file descriptors do not reach the sandbox" "[[ -z \$out ]]"
+
+$kandor -C "$tmp/project" --shell -- -c 'kill -TERM $$' >/dev/null 2>&1
+check "a sandbox killed by a signal gives 128+n" "[[ $? -eq 143 ]]"
+
+$kandor -C "$tmp/project" --shell -- -c 'sleep 30' >/dev/null 2>&1 &
+kpid=$!; sleep 1; kill -TERM "$kpid"; wait "$kpid"
+check "SIGTERM removes the shared temporary profile" \
+  "! grep -qsx '$kpid' ${TMPDIR:-/tmp}/kandor-shared-$(id -u).*/pid"
+
+printf '[mounts]\nread_only = ["~/kandor-missing-%s"]\n' "$$" > "$tmp/missing.toml"
+out=$(KANDOR_CONFIG=$tmp/missing.toml $kandor -C "$tmp/project" --dry-run 2>&1)
+check "a missing configured path is a clear error" "grep -q 'ro path does not exist' <<<\"\$out\""
 
 # ---------------------------------------------------------------------------
 # Network isolation
