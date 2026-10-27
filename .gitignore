@@ -10,3 +10,6 @@ Thumbs.db
 # Local logs and temporary files
 *.log
 *.tmp
+
+# Build output
+/bin/

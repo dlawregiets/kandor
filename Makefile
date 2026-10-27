@@ -5,7 +5,7 @@ INSTALL ?= install
 
 PROG := kandor
 
-.PHONY: all help install uninstall check
+.PHONY: all help build install uninstall check
 
 all: help
 
@@ -14,7 +14,8 @@ help:
 	  'Usage: make [target]' \
 	  '' \
 	  'Targets:' \
-	  '  install    Install $(PROG) to $(BINDIR)' \
+	  '  build      Build bin/$(PROG)' \
+	  '  install    Build and install $(PROG) to $(BINDIR)' \
 	  '  uninstall  Remove $(PROG) from $(BINDIR)' \
 	  '  check      Run the unit and smoke tests' \
 	  '  help       Show this message' \
@@ -24,13 +25,18 @@ help:
 	  '  BINDIR     Binary directory [default: $$(PREFIX)/bin]' \
 	  '  DESTDIR    Staging root for package builds [default: empty]'
 
-install: $(PROG)
+build:
+	go build -trimpath -o bin/$(PROG) ./cmd/kandor
+
+install: build
 	$(INSTALL) -d "$(DESTDIR)$(BINDIR)"
-	$(INSTALL) -m 0755 "$(PROG)" "$(DESTDIR)$(BINDIR)/$(PROG)"
+	$(INSTALL) -m 0755 "bin/$(PROG)" "$(DESTDIR)$(BINDIR)/$(PROG)"
 
 uninstall:
 	rm -f "$(DESTDIR)$(BINDIR)/$(PROG)"
 
 check:
+	go vet ./...
+	go test ./...
 	./tests/unit.sh
 	./tests/smoke.sh
