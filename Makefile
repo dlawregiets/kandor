@@ -26,7 +26,7 @@ help:
 	  '  DESTDIR    Staging root for package builds [default: empty]'
 
 build:
-	go build -trimpath -o bin/$(PROG) ./cmd/kandor
+	CGO_ENABLED=0 go build -trimpath -o bin/$(PROG) ./cmd/kandor
 
 install: build
 	$(INSTALL) -d "$(DESTDIR)$(BINDIR)"
@@ -38,4 +38,6 @@ uninstall:
 check: build
 	go vet ./...
 	go test ./...
+	@file bin/$(PROG) | grep -q 'statically linked' || \
+	  { echo 'bin/$(PROG) is not statically linked' >&2; exit 1; }
 	./tests/smoke.sh
