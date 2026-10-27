@@ -126,8 +126,3 @@ func validateEnv(e EnvSection) error {
 	}
 	return nil
 }
-
-// IsLegacy reports whether data looks like the old line-based format.
-func IsLegacy(data []byte) bool {
-	return false
-}
