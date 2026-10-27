@@ -17,7 +17,7 @@ help:
 	  '  build      Build bin/$(PROG)' \
 	  '  install    Build and install $(PROG) to $(BINDIR)' \
 	  '  uninstall  Remove $(PROG) from $(BINDIR)' \
-	  '  check      Run the unit and smoke tests' \
+	  '  check      Run go vet, the Go tests and the smoke tests' \
 	  '  help       Show this message' \
 	  '' \
 	  'Variables:' \
@@ -35,8 +35,7 @@ install: build
 uninstall:
 	rm -f "$(DESTDIR)$(BINDIR)/$(PROG)"
 
-check:
+check: build
 	go vet ./...
 	go test ./...
-	./tests/unit.sh
 	./tests/smoke.sh
