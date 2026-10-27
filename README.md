@@ -580,17 +580,21 @@ branches can therefore be tested before they merge into `develop`, and release
 or hotfix branches before they merge into `main`. The smoke tests are not run
 there because they need a real `opencode` binary; run `make check` locally.
 
-Releases follow GitFlow. On the release or hotfix branch, bump `version` in
-`internal/app/app.go`, merge the branch into `main`, then tag the merge commit:
+Releases follow GitFlow. Merge the release or hotfix branch into `main`, then
+tag the merge commit:
 
 ```sh
 git tag -a v0.4.0 -m "kandor 0.4.0"
 git push origin v0.4.0
 ```
 
+The pushed tag becomes the binary version; there is no version file to keep in
+sync. Local and CI builds are stamped with `git describe` output instead: the
+nearest tag plus any commits since it, or the commit SHA when no tag describes
+the build.
+
 `.github/workflows/release.yml` checks that the tag is a semantic version and
-matches the version in `internal/app/app.go`. Stable tags must be reachable
-from `main`; pre-release tags may also be on a `release/*` or `hotfix/*`
-branch. It then runs the tests and publishes static tarballs for both
-architectures plus `SHA256SUMS`. Tags with a pre-release suffix such as
-`v0.4.0-rc.1` are marked as GitHub pre-releases.
+that stable tags are reachable from `main`; pre-release tags may also be on a
+`release/*` or `hotfix/*` branch. It then runs the tests and publishes static
+tarballs for both architectures plus `SHA256SUMS`. Tags with a pre-release
+suffix such as `v0.4.0-rc.1` are marked as GitHub pre-releases.
