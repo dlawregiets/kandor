@@ -3,9 +3,11 @@ package run
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/dlawregiets/kandor/internal/sandbox"
 )
@@ -23,6 +25,56 @@ func TestChildSignalStatus(t *testing.T) {
 	if code := Child([]string{"sh", "-c", "kill -TERM $$"}); code != 143 {
 		t.Errorf("exit code = %d, want 143", code)
 	}
+}
+
+// A signal ignored when kandor starts (nohup, background jobs) must stay
+// ignored: neither caught nor forwarded to the sandbox.
+func TestGuardRespectsIgnoredSignals(t *testing.T) {
+	signal.Ignore(syscall.SIGHUP)
+	defer signal.Reset(syscall.SIGHUP)
+	g := NewGuard()
+	defer g.Stop()
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		syscall.Kill(os.Getpid(), syscall.SIGHUP)
+	}()
+	if code := g.Child([]string{"sh", "-c", "sleep 1; exit 0"}); code != 0 {
+		t.Errorf("exit code = %d, want 0: an ignored SIGHUP was forwarded", code)
+	}
+}
+
+func TestGuardForwardsTerm(t *testing.T) {
+	g := NewGuard()
+	defer g.Stop()
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		syscall.Kill(os.Getpid(), syscall.SIGTERM)
+	}()
+	if code := g.Child([]string{"sh", "-c", "sleep 5"}); code != 143 {
+		t.Errorf("exit code = %d, want 143", code)
+	}
+}
+
+// A signal that arrives before the sandbox starts is reported, so kandor can
+// clean up and exit instead of dying with its temporary files in place.
+func TestGuardPendingBeforeChild(t *testing.T) {
+	g := NewGuard()
+	defer g.Stop()
+	if _, ok := g.Pending(); ok {
+		t.Fatal("Pending reported a signal before any arrived")
+	}
+	syscall.Kill(os.Getpid(), syscall.SIGTERM)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if sig, ok := g.Pending(); ok {
+			if sig != syscall.SIGTERM {
+				t.Errorf("Pending = %v, want SIGTERM", sig)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Error("SIGTERM before the sandbox started was not reported")
 }
 
 func TestChildMissingProgram(t *testing.T) {

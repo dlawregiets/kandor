@@ -199,6 +199,19 @@ kpid=$!; sleep 1; kill -TERM "$kpid"; wait "$kpid"
 check "SIGTERM removes the shared temporary profile" \
   "! grep -qsx '$kpid' ${TMPDIR:-/tmp}/kandor-shared-$(id -u).*/pid"
 
+# A signal during startup (here: while a slow git is probed) must still
+# remove the shared temporary profile.
+mkdir -p "$tmp/slowgit"
+printf '#!/bin/sh\nsleep 3\nexec %s "$@"\n' "$(command -v git)" > "$tmp/slowgit/git"
+chmod +x "$tmp/slowgit/git"
+PATH=$tmp/slowgit:$PATH $kandor -C "$tmp/project" --shell -- -c true >/dev/null 2>&1 &
+kpid=$!; sleep 1
+started=$(grep -lsx "$kpid" ${TMPDIR:-/tmp}/kandor-shared-$(id -u).*/pid)
+kill -TERM "$kpid"; wait "$kpid"; status=$?
+check "SIGTERM during startup exits 143" "[[ $status -eq 143 ]]"
+check "SIGTERM during startup removes the shared temporary profile" \
+  "[[ -n '$started' ]] && ! grep -qsx '$kpid' ${TMPDIR:-/tmp}/kandor-shared-$(id -u).*/pid"
+
 printf '[mounts]\nread_only = ["~/kandor-missing-%s"]\n' "$$" > "$tmp/missing.toml"
 out=$(KANDOR_CONFIG=$tmp/missing.toml $kandor -C "$tmp/project" --dry-run 2>&1)
 check "a missing configured path is a clear error" "grep -q 'ro path does not exist' <<<\"\$out\""

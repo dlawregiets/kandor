@@ -71,18 +71,63 @@ func DisableUsernsWorks(f sandbox.Features) bool {
 	return f.DisableUserns && quiet("--ro-bind", "/", "/", "--unshare-user", "--disable-userns", "--", "/bin/true") == nil
 }
 
+// The signals kandor handles.  SIGINT and SIGQUIT come from the terminal
+// and also reach the sandbox; SIGTERM and SIGHUP are forwarded to it.
+var handled = []os.Signal{syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP}
+
+// Guard catches signals from before the sandbox starts until kandor has
+// cleaned up, so an interrupted run still removes its temporary files and
+// audits the git directory.  Create it before any temporary files exist and
+// Stop it after cleanup.
+type Guard struct {
+	ch chan os.Signal
+}
+
+// NewGuard starts catching the handled signals.  A signal that was ignored
+// when kandor started (nohup, a background job) stays ignored: it is neither
+// caught nor forwarded to the sandbox.
+func NewGuard() *Guard {
+	g := &Guard{ch: make(chan os.Signal, 8)}
+	var catch []os.Signal
+	for _, sig := range handled {
+		if !signal.Ignored(sig) {
+			catch = append(catch, sig)
+		}
+	}
+	if len(catch) > 0 {
+		signal.Notify(g.ch, catch...)
+	}
+	return g
+}
+
+// Stop restores the default signal handling.
+func (g *Guard) Stop() { signal.Stop(g.ch) }
+
+// Pending returns a signal that arrived while no sandbox was running.
+func (g *Guard) Pending() (syscall.Signal, bool) {
+	select {
+	case sig := <-g.ch:
+		return sig.(syscall.Signal), true
+	default:
+		return 0, false
+	}
+}
+
+// Child runs argv with a temporary Guard; see Guard.Child.
+func Child(argv []string) int {
+	g := NewGuard()
+	defer g.Stop()
+	return g.Child(argv)
+}
+
 // Child runs argv with kandor's standard streams and returns its exit
 // status (128 + n if it was killed by signal n).  While it runs, SIGINT and
 // SIGQUIT are left to the child (the terminal delivers them to it), and
 // SIGTERM and SIGHUP are forwarded to it, so kandor outlives the sandbox and
 // can clean up.
-func Child(argv []string) int {
+func (g *Guard) Child(argv []string) int {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-
-	signals := make(chan os.Signal, 4)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP)
-	defer signal.Stop(signals)
 
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "kandor: error: %v\n", err)
@@ -92,7 +137,7 @@ func Child(argv []string) int {
 	go func() {
 		for {
 			select {
-			case sig := <-signals:
+			case sig := <-g.ch:
 				if sig == syscall.SIGTERM || sig == syscall.SIGHUP {
 					cmd.Process.Signal(sig)
 				}

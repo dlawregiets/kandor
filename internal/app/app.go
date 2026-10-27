@@ -135,6 +135,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		tmpdir = "/tmp"
 	}
 	uid := os.Getuid()
+	// From here on kandor creates temporary files.  Catch signals until they
+	// are cleaned up (deferred calls run in reverse, so the guard stops last).
+	guard := runner.NewGuard()
+	defer guard.Stop()
 	layout, cleanup, err := profile.Setup(s, host, kandorHome, tmpdir, uid)
 	if err != nil {
 		return o.fail(err)
@@ -225,12 +229,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	argv := append([]string{"bwrap"}, p.Args()...)
 	argv = append(append(argv, "--"), cmd...)
+	// A signal during startup ends the run here, after which the deferred
+	// cleanup removes the temporary profile.
+	if sig, ok := guard.Pending(); ok {
+		return 128 + int(sig)
+	}
 	if req.DryRun {
 		fmt.Fprintln(stdout, sandbox.FormatCommand(argv))
 		return 0
 	}
 
-	code := runner.Child(argv)
+	code := guard.Child(argv)
 	sandbox.Audit(mounts.Git, s.ProjectDir, o.warn)
 	return code
 }
