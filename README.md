@@ -4,7 +4,7 @@ Run [OpenCode](https://opencode.ai) inside a
 [bubblewrap](https://github.com/containers/bubblewrap) sandbox on Linux.
 
 `kandor` is named after the Bottle City of Kandor: a whole environment sealed
-inside a container. It is a small Bash wrapper around `bwrap`. It gives
+inside a container. It is a small Go program that runs `bwrap`. It gives
 OpenCode (and everything it spawns: shells, language servers, MCP servers,
 plugins, build tools) a private view of the host:
 
@@ -29,7 +29,7 @@ credentials, host sessions and the host session database are not exposed.
 `kandor` currently supports OpenCode only. `KANDOR_BIN` overrides the path
 to the `opencode` binary.
 
-Create a commented configuration file at `~/.config/kandor/config` (or
+Create a commented configuration file at `~/.config/kandor/config.toml` (or
 `$KANDOR_CONFIG`) with:
 
 ```sh
@@ -44,8 +44,9 @@ Options `kandor` does not know, such as OpenCode's `--agent` or
 ## Requirements
 
 - Linux
-- `bash` 4.4+
 - `bubblewrap` (`bwrap`) 0.5+, 0.9+ recommended
+- `git`, optional (used to find and protect the project's repository)
+- Go 1.27+ to build from source
 - Working unprivileged user namespaces, or a setuid `bwrap` installation
 - `opencode` in `PATH` (or set `KANDOR_BIN`)
 
@@ -59,13 +60,13 @@ If that fails, see [Troubleshooting](#troubleshooting).
 
 ## Install
 
-Install it for the current user with:
+Build and install it for the current user with:
 
 ```sh
 make install
 ```
 
-This installs `kandor` to `~/.local/bin`. Override the location with `PREFIX` or
+This builds `bin/kandor` and installs it to `~/.local/bin`. Override the location with `PREFIX` or
 `BINDIR`:
 
 ```sh
@@ -73,14 +74,8 @@ make install PREFIX=/usr/local   # requires write access to /usr/local
 make install BINDIR="$HOME/bin"
 ```
 
-Remove it with `make uninstall`.
-
-Alternatively, install or symlink it manually:
-
-```sh
-install -m 0755 kandor ~/.local/bin/kandor
-ln -s "$PWD/kandor" ~/.local/bin/kandor
-```
+Remove it with `make uninstall`. `make build` only builds `bin/kandor`;
+the result is a single static binary you can copy anywhere.
 
 ## Quick start
 
@@ -311,6 +306,7 @@ Run `kandor --help` for the full list. Common options:
 | Option | Meaning |
 | --- | --- |
 | `--init-config` | Create a commented config file and exit |
+| `--migrate-config` | Convert the old line-based config file to `config.toml` |
 | `-C, --dir DIR` | Project directory (default: `$PWD`) |
 | `--ro PATH` | Extra read-only mount (repeatable) |
 | `--rw PATH` | Extra read-write mount (repeatable) |
@@ -337,39 +333,78 @@ For safety, `--ro` and `--rw` refuse `/`, `$HOME`, ancestors of `$HOME`,
 
 ### Configuration file
 
-`~/.config/kandor/config` (or `$KANDOR_CONFIG`) supports one
-directive per line:
+`kandor` reads `$KANDOR_CONFIG`, or `$XDG_CONFIG_HOME/kandor/config.toml`
+(default `~/.config/kandor/config.toml`). It is a TOML file with one section
+per topic; every key is optional:
 
-```sh
-# Extra mounts
-rw ~/go
-rw ~/.cache/go-build
-ro ~/.config/gcloud
+```toml
+[mounts]
+read_only  = ["~/.config/gcloud"]
+read_write = ["~/go", "~/.cache/go-build"]
 
-# Environment
-env GOPROXY=https://proxy.golang.org,direct
+[env]
+pass = ["GITHUB_TOKEN"]          # copied from your shell
 
-# Defaults
-no-net
-profile work
-no-seed
-ssh
-ssh-agent
-git-credentials
-netrc
-npmrc
-no-gitconfig
-no-protect-git
-allow-userns
-no-new-session
+[env.set]
+GOPROXY = "https://proxy.golang.org,direct"
+
+[sandbox]
+network      = true              # false = no network
+allow_userns = false
+new_session  = "auto"            # "auto", true or false
+
+[credentials]                    # all off unless you turn them on
+ssh             = false
+ssh_agent       = false
+git_credentials = false
+netrc           = false
+npmrc           = false
+
+[git]
+mount_config = true              # your ~/.gitconfig
+protect      = true              # read-only hooks and .git/config
+
+[profile]
+isolated = false
+name     = "default"             # setting it implies isolated = true
+seed     = true
+
+[agents.opencode]                # only when running OpenCode
+binary = "/opt/opencode/bin/opencode"   # KANDOR_BIN overrides it
+
+[agents.opencode.mounts]
+read_only = []
 ```
 
-Create a starter file with `kandor --init-config` (it uses `$KANDOR_CONFIG`
-when that is set and never overwrites an existing file). Config files from
-earlier versions may contain `agent opencode`, which is still accepted; any
-other agent is an error. Command-line options are
-applied after the file. A later mount of the same path wins, so an
-`--rw PATH` on the command line overrides `ro PATH` in the config file.
+Paths may start with `~` or `$HOME`. Unknown sections and keys, values of the
+wrong type and agents other than `opencode` are errors, so a typo cannot
+silently change the sandbox.
+
+Create a commented starter file with `kandor --init-config` (it uses
+`$KANDOR_CONFIG` when that is set and never overwrites an existing file).
+
+Command-line options override the file. Lists such as mounts and
+environment variables add to the file's lists. When the same path is mounted
+more than once, the later layer wins, in the order: the file's top-level
+sections, the `[agents.opencode]` section, the command line. So `--ro PATH`
+makes a configured `read_write` path read-only for one run, and `--rw PATH`
+makes a `read_only` path writable. Listing the same path as both
+`read_only` and `read_write` in one layer is an error.
+
+#### Migrating from the old format
+
+Earlier versions used a line-based file at `~/.config/kandor/config`. If
+that file exists and `config.toml` does not, `kandor` stops and asks you to
+convert it:
+
+```sh
+kandor --migrate-config
+```
+
+This writes `config.toml` next to the old file (never overwriting) and leaves
+the old file in place, so you can delete it once you have checked the result.
+If `KANDOR_CONFIG` points at an old-format file, the new file is written in
+the same directory and you need to point `KANDOR_CONFIG` at it.
 
 ## Typical setups
 
@@ -506,17 +541,18 @@ rm -rf ~/.config/kandor        # optional config file
 
 ## Tests
 
-Two harnesses are included; `make check` runs both:
+`make check` runs `go vet`, the Go tests and the smoke tests:
 
 ```sh
 make check
-# or: ./tests/unit.sh && ./tests/smoke.sh
+# or: go test ./... && make build && ./tests/smoke.sh
 ```
 
-`tests/unit.sh` sources `kandor` and exercises the command-line parser, the
-config loader, the mount planner and the OpenCode command builder without
-starting a sandbox. `tests/smoke.sh` runs real sandboxes and checks the
-sandbox boundary, private `/tmp`, hidden home, read-only `/etc`, isolated
-profiles, extra mounts, network isolation and host service-password
-isolation. Neither calls an LLM; the smoke tests need `bwrap` and
+The Go tests cover the command-line parser, configuration loading and
+migration, the mount planner, git protection, environment filtering and the
+OpenCode command builder without starting a sandbox. `tests/smoke.sh` runs
+real sandboxes with the built `bin/kandor` and checks the sandbox boundary,
+private `/tmp`, hidden home, read-only `/etc`, isolated profiles, extra
+mounts, network isolation, host service-password isolation, git protection
+and signal handling. Neither calls an LLM; the smoke tests need `bwrap` and
 `opencode`.
