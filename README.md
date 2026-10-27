@@ -1,17 +1,16 @@
 # kandor
 
-Run [OpenCode](https://opencode.ai), [Pi](https://pi.dev) or
-[oh-my-pi](https://github.com/can1357/oh-my-pi) (`omp`) inside a
+Run [OpenCode](https://opencode.ai) inside a
 [bubblewrap](https://github.com/containers/bubblewrap) sandbox on Linux.
 
 `kandor` is named after the Bottle City of Kandor: a whole environment sealed
-inside a container. It is a small Bash wrapper around `bwrap`. It gives the
-agent (and everything it spawns: shells, language servers, MCP servers,
+inside a container. It is a small Bash wrapper around `bwrap`. It gives
+OpenCode (and everything it spawns: shells, language servers, MCP servers,
 plugins, build tools) a private view of the host:
 
 - `/` is mounted read-only.
 - Your home directory is replaced by an empty tmpfs. Only the project and
-  the agent's own state directories are visible.
+  OpenCode's own state directories are visible.
 - `/tmp`, `/var/tmp`, `/run/user/$UID`, `/mnt`, `/media`, `/srv` and `/run` are
   private. Host runtime sockets (DBus, keyring, journal, SSH agent) are hidden.
 - The process gets its own user, PID, IPC, UTS and cgroup namespaces.
@@ -21,80 +20,26 @@ plugins, build tools) a private view of the host:
   sandbox. The host's service credentials are never mounted; each profile
   writes its own `service.json` with a private port.
 
-By default `kandor` shares the host's agent state: OpenCode uses the host
-session database, while Pi and omp mount their whole `~/.pi/agent` and
-`~/.omp` trees (including stored credentials). Use `--isolated` (or
-`--profile NAME`) for a **sandbox-only profile** under
-`~/.local/share/kandor/<profile>`: the host config is copied in once, so
-plugins and settings keep working, but stored credentials, host sessions and
-the host session database are not exposed.
+By default `kandor` shares the host's OpenCode data directory (the session
+database and stored logins). Use `--isolated` (or `--profile NAME`) for a
+**sandbox-only profile** under `~/.local/share/kandor/<profile>`: the host
+config is copied in once, so plugins and settings keep working, but stored
+credentials, host sessions and the host session database are not exposed.
 
-## Agents
-
-`kandor` runs OpenCode by default. Select another agent with `--agent`:
-
-```sh
-kandor --agent pi -C ~/code/my-project
-kandor --agent omp -C ~/code/my-project
-```
-
-The agent's arguments are passed through after `--` (or unchanged once one is
-passed on the command line). Only OpenCode treats a bare positional directory
-as the project; for Pi and omp use `-C`/`--dir` (or their own `--cwd`).
-
-With `--isolated`, each profile stores the agent's state separately:
-
-| Agent | Profile state | Host state (shared default) |
-| --- | --- | --- |
-| `opencode` | `config/`, `data/`, `state/`, `cache/` as `opencode/` subtrees | `~/.config/opencode`, `~/.local/share/opencode` |
-| `pi` | `<profile>/pi/agent` | `~/.pi/agent` |
-| `omp` | `<profile>/omp` | `~/.omp` |
-
-For Pi and omp the host config is copied into an isolated profile once, but
-credential files (`auth.json`, `mcp-auth.json`, `agent.db` and similar) and
-host sessions are never copied. Logins therefore differ by mode:
-
-```sh
-kandor auth login                 # OpenCode: host data dir, shared by default
-kandor --agent omp -- login       # omp: host ~/.omp, shared by default
-kandor --agent pi                 # Pi: /login in the TUI, host ~/.pi/agent
-kandor --agent pi --isolated      # Pi: /login inside the isolated profile
-```
-
-Pi and omp do not have OpenCode's service registration; `--standalone` and
-the `service.json` handling only apply to OpenCode.
-
-The default agent can come from `KANDOR_AGENT`, the `agent` directive in
-the configuration file, or `--agent` on the command line. Precedence is
-`--agent` > `KANDOR_AGENT` > config file > `opencode`. `KANDOR_BIN`
-overrides the binary path for the selected agent.
+`kandor` currently supports OpenCode only. `KANDOR_BIN` overrides the path
+to the `opencode` binary.
 
 Create a commented configuration file at `~/.config/kandor/config` (or
 `$KANDOR_CONFIG`) with:
 
 ```sh
-kandor --init-config                 # default agent: opencode
-kandor --init-config --agent omp     # make omp the default
+kandor --init-config
 ```
-
-To change the saved default later without editing the file by hand, use
-`kandor --set-agent`:
-
-```sh
-kandor --set-agent pi
-```
-
-It creates the file if needed and replaces the existing `agent` directive
-while leaving the rest of the file untouched. `--agent` still overrides the
-saved default for a single run.
 
 `kandor` consumes its own options (`-C`, `--profile`, `--env`, ...) before
-the agent sees them. Pass flags that collide with kandor options, such as
-omp's `--profile`, after `--`:
-
-```sh
-kandor --agent omp -C ~/code/proj -- --profile inner
-```
+OpenCode sees them. Pass flags that collide with kandor options after `--`.
+Options `kandor` does not know, such as OpenCode's `--agent` or
+`--continue`, are passed through unchanged.
 
 ## Requirements
 
@@ -102,7 +47,7 @@ kandor --agent omp -C ~/code/proj -- --profile inner
 - `bash` 4.4+
 - `bubblewrap` (`bwrap`) 0.5+, 0.9+ recommended
 - Working unprivileged user namespaces, or a setuid `bwrap` installation
-- `opencode`, `pi` or `omp` in `PATH` (or set `KANDOR_BIN`)
+- `opencode` in `PATH` (or set `KANDOR_BIN`)
 
 Check that bubblewrap works on your system:
 
@@ -150,18 +95,11 @@ kandor --isolated --profile work
 # Pick a project directory
 kandor -C ~/code/my-project
 
-# Run Pi or oh-my-pi instead of OpenCode
-kandor --agent pi -C ~/code/my-project
-kandor --agent omp -C ~/code/my-project
-
 # Non-interactive run
 kandor run "fix the failing tests"
-kandor --agent omp -- -p "fix the failing tests"
 
 # Log in (OAuth providers; env API keys are forwarded automatically)
 kandor auth login
-kandor --agent omp -- login anthropic
-kandor --agent pi --isolated      # then /login in the TUI
 
 # Offline / no network at all
 kandor --no-net
@@ -173,9 +111,9 @@ kandor --shell
 kandor --dry-run
 ```
 
-Options and arguments are passed to the agent after the first positional
-argument or after `--`. For OpenCode, a positional directory is used as the
-project directory (like `-C`):
+Options and arguments are passed to OpenCode after the first positional
+argument or after `--`. A positional directory is used as the project
+directory (like `-C`):
 
 ```sh
 kandor run --model openrouter/anthropic/claude-sonnet-4 "review this"
@@ -183,16 +121,8 @@ kandor -- --continue
 kandor --completions bash
 ```
 
-Pi and omp take prompts and `@files` positionally, so use `-C` for the
-project and pass their arguments after `--`:
-
-```sh
-kandor --agent pi -C ~/code/proj -- "review this"
-kandor --agent omp -C ~/code/proj -- --model opus "review this"
-```
-
 > Note: `--version` is the wrapper version. Use `kandor -- --version` for
-> the agent version.
+> the OpenCode version.
 
 ## Profiles
 
@@ -211,34 +141,23 @@ State lives in:
 ├── config/opencode/
 ├── data/opencode/
 ├── state/opencode/
-├── cache/opencode/
-├── pi/agent/          # Pi
-└── omp/               # oh-my-pi
+└── cache/opencode/
 ```
 
-The first time a profile is used, the host config is copied in once:
-
-- OpenCode: `~/.config/opencode` into `config/opencode` (except
-  `service.json`).
-- Pi: from `~/.pi/agent` into `pi/agent`, only `settings.json`,
-  `keybindings.json`, `AGENTS.md`, `SYSTEM.md`, `APPEND_SYSTEM.md` and the
-  `extensions`, `skills`, `prompts`, `themes`, `npm`, `git`, `bin` and
-  `memory` directories. Credentials (`auth.json`, `mcp-auth.json`), sessions
-  and anything else (including `models.json`, which can hold API keys) stay
-  on the host; `kandor` lists what it skipped so you can copy it by hand.
-- omp: `~/.omp/agent/config.yml`, settings, commands, prompts, skills,
-  themes, tools, modules and memories, plus `~/.omp/plugins`, into `omp/`.
-  The credential/session databases (`agent.db`, `history.db`, `models.db`,
-  `sessions/`) are never copied.
+The first time a profile is used, `~/.config/opencode` is copied into
+`config/opencode` once (except `service.json`). Stored logins live in the
+data directory (`~/.local/share/opencode/auth.json`) and are not copied.
+Note that `opencode.json` itself is copied, so API keys written directly into
+it reach the profile.
 
 This makes plugins and settings work without copying the host's sessions or
 stored OAuth credentials. Delete the profile directory to start over, or use
 `--no-seed` to start with an empty config. Do not run two sandboxes with the
-same profile and agent at the same time; use different `--profile` names
+same profile at the same time; use different `--profile` names
 instead.
 
 Environment variables of known LLM providers are forwarded automatically to
-every agent: those starting with `OPENAI_`, `ANTHROPIC_`, `OPENROUTER_`,
+OpenCode: those starting with `OPENAI_`, `ANTHROPIC_`, `OPENROUTER_`,
 `GEMINI_`, `GOOGLE_`, `VERTEX_`, `AWS_`, `AZURE_`, `DEEPSEEK_`, `XAI_`,
 `GROQ_`, `MISTRAL_`, `COHERE_`, `PERPLEXITY_`, `TOGETHER_`, `FIREWORKS_`,
 `CEREBRAS_`, `OLLAMA_`, `LMSTUDIO_`, `HF_`, `REPLICATE_`, `MOONSHOT_`,
@@ -246,13 +165,11 @@ every agent: those starting with `OPENAI_`, `ANTHROPIC_`, `OPENROUTER_`,
 proxy and CA settings. Note that `AWS_*`, `AZURE_*` and `GOOGLE_*` include
 cloud credentials (for Bedrock, Azure OpenAI and Vertex). Other secrets, such
 as `STRIPE_SECRET_KEY` or `GITHUB_TOKEN`, are not forwarded; pass them
-explicitly with `--env NAME` if the agent needs them. In an isolated profile, OAuth
-logins are stored in the profile; log in once per profile:
+explicitly with `--env NAME` if OpenCode needs them. In an isolated profile,
+OAuth logins are stored in the profile; log in once per profile:
 
 ```sh
-kandor --isolated auth login     # OpenCode
-kandor --isolated --agent omp -- login     # omp (pick a provider)
-kandor --isolated --agent pi                # Pi: use /login in the TUI
+kandor --isolated auth login
 ```
 
 ### Shared profile (default)
@@ -260,10 +177,9 @@ kandor --isolated --agent pi                # Pi: use /login in the TUI
 ```sh
 kandor
 kandor --shared              # same as the default, prints a warning
-kandor --agent omp --shared
 ```
 
-For OpenCode, this shares the host's live `~/.local/share/opencode`
+This shares the host's live `~/.local/share/opencode`
 read-write: the session database and the stored provider logins in
 `auth.json`. Config, state and cache are copied or created in a
 temporary directory for the duration of the run; the host's cached `rg`
@@ -271,28 +187,17 @@ binary is mounted read-only so OpenCode does not have to download it again.
 The host's `service.json` password and service registration stay outside the
 sandbox.
 
-For Pi and omp the **entire** host agent tree (`~/.pi/agent`, `~/.omp`) is
-mounted read-write: sessions, settings, caches and stored provider
-credentials are all shared, and config/plugin/cache changes are written to
-the host tree. Use `--isolated` to keep credentials and configuration
-private instead.
-
 Sharing is useful for continuing host sessions, but it is **less isolated**:
 
 - The host's session data (all projects, prompts and tool output) is
   readable inside the sandbox. Treat it as trusted with anything that has
   ever appeared in a host session; that can include credentials or the host
   service password if they were ever printed.
-- The sandbox can modify host sessions and host agent state. For OpenCode,
-  config, plugin and cache changes are made in a temporary copy and
-  discarded when the run exits. For Pi and omp they are written to the host
-  `~/.pi/agent` / `~/.omp` trees, and the sandbox can also read the
-  credentials stored there (`auth.json`, `mcp-auth.json`, `agent.db`).
-- **Code planted there runs outside the sandbox later.** For Pi and omp,
-  extensions, plugins, skills and tools that the sandbox installs into
-  `~/.pi/agent` / `~/.omp` are loaded by the agent the next time you run it
-  directly on the host, unsandboxed. A compromised sandbox in shared mode can
-  therefore persist and escape.
+- The sandbox can read the stored provider logins in `auth.json` and modify
+  host sessions. Config, plugin and cache changes are made in a temporary
+  copy and discarded when the run exits.
+- Anything the sandbox writes into the host data directory is read by
+  OpenCode when you next run it on the host, outside the sandbox.
 - Host OpenCode must not be running a conflicting migration; SQLite WAL
   generally allows concurrent access, but avoid concurrent heavy writes.
 
@@ -309,8 +214,6 @@ Sharing is useful for continuing host sessions, but it is **less isolated**:
 | `$HOME` | Empty tmpfs; only selected paths are mounted |
 | Project | Read-write (the only source tree by default) |
 | OpenCode config/data/state/cache | Isolated profile (opt-in), read-write |
-| Pi agent directory | Isolated profile at `~/.pi/agent` (opt-in), read-write |
-| omp config root | Isolated profile at `~/.omp` (opt-in), read-write |
 | `/tmp`, `/var/tmp` | Private tmpfs |
 | `/run`, `/run/user/$UID` | Private; host DBus/keyring/journal sockets hidden |
 | `/mnt`, `/media`, `/srv`, `/root` | Private tmpfs |
@@ -326,13 +229,10 @@ The host's OpenCode service credentials are not mounted. Isolated profiles
 write their own `service.json` with a private port, and shared mode uses a
 temporary config/state copy, so a compromised sandbox cannot read the
 password from those service files. (In shared mode the session database
-itself may contain secrets that appeared in past sessions.) Pi and omp store
-provider credentials in their agent directories (`~/.pi/agent/auth.json`,
-`~/.pi/agent/mcp-auth.json`, `~/.omp/agent/agent.db`); an isolated profile
-replaces those directories, so a sandbox cannot read the host's stored
-credentials. In the default shared mode, both Pi and omp expose their whole
-host trees (`~/.pi/agent`, including `auth.json` and `mcp-auth.json`, and
-`~/.omp`, including `agent.db`).
+itself may contain secrets that appeared in past sessions.) Stored provider
+logins live in `~/.local/share/opencode/auth.json`: an isolated profile has
+its own data directory, so a sandbox cannot read the host's logins, but the
+default shared mode mounts the host data directory, including `auth.json`.
 
 Git worktrees and submodules work: the common git directory is mounted
 read-write only after validating the worktree's `.git` back-reference, so an
@@ -393,19 +293,16 @@ before running them on the host.
   variable is set, that file is mounted read-only so the provider can use it.
   Environment API keys are visible to the agent (it needs them to call the
   provider).
-- **The agent profile.** In an isolated profile, the sandbox can read and
+- **The OpenCode profile.** In an isolated profile, the sandbox can read and
   modify its own sessions, config, plugins and cache. That is intentional.
-  In the default shared mode it can read and modify host sessions; config,
-  state and cache are private copies for OpenCode. For Pi and omp the whole
-  host `~/.pi/agent` / `~/.omp` tree is shared, including stored credentials.
+  In the default shared mode it can read and modify host sessions and read
+  the stored logins; config, state and cache are private copies.
 - **GUI, GPU and devices.** The sandbox gets a minimal `/dev`; there is no
   X11/Wayland, GPU, audio, FUSE or raw disk access. `--allow-userns` is
   available for tools (for example headless browsers) that need nested user
   namespaces, but it weakens the sandbox.
 - **The agent's own permission prompts.** This wrapper isolates the process;
-  it does not replace the agent's permission system. Keep using it. omp also
-  spawns local daemons and loopback bridges; those stay inside the sandbox
-  namespaces (with `--no-net` the sandbox loopback is isolated as well).
+  it does not replace OpenCode's permission system. Keep using it.
 
 ## Options
 
@@ -413,15 +310,13 @@ Run `kandor --help` for the full list. Common options:
 
 | Option | Meaning |
 | --- | --- |
-| `--agent NAME` | `opencode` (default), `pi` or `omp` |
 | `--init-config` | Create a commented config file and exit |
-| `--set-agent NAME` | Save `NAME` as the default agent in the config file |
 | `-C, --dir DIR` | Project directory (default: `$PWD`) |
 | `--ro PATH` | Extra read-only mount (repeatable) |
 | `--rw PATH` | Extra read-write mount (repeatable) |
 | `--env NAME[=VALUE]` | Pass an environment variable (repeatable) |
 | `--isolated` | Use a sandbox-only profile (opt-in) |
-| `--shared` | Share host agent state (default) |
+| `--shared` | Share the host's OpenCode data (default) |
 | `--profile NAME` | Isolated profile name (implies `--isolated`) |
 | `--no-seed` | Do not copy host config into a new profile |
 | `--no-net` | No network (`--unshare-net`) |
@@ -455,7 +350,6 @@ ro ~/.config/gcloud
 env GOPROXY=https://proxy.golang.org,direct
 
 # Defaults
-agent omp
 no-net
 profile work
 no-seed
@@ -470,9 +364,10 @@ allow-userns
 no-new-session
 ```
 
-Create a starter file with `kandor --init-config` (optionally with
-`--agent NAME`) or change the saved default with `kandor --set-agent NAME`.
-Those helpers use `$KANDOR_CONFIG` when it is set. Command-line options are
+Create a starter file with `kandor --init-config` (it uses `$KANDOR_CONFIG`
+when that is set and never overwrites an existing file). Config files from
+earlier versions may contain `agent opencode`, which is still accepted; any
+other agent is an error. Command-line options are
 applied after the file. A later mount of the same path wins, so an
 `--rw PATH` on the command line overrides `ro PATH` in the config file.
 
@@ -563,26 +458,20 @@ poison the host's package cache. If a plugin needs to write to it, opt in:
 kandor --rw ~/.bun/install/cache
 ```
 
-The isolated profile's own cache (`.../cache/opencode`) is writable. Pi and
-omp install extensions and plugins into their profile directories
-(`.../pi/agent`, `.../omp/plugins`), which are writable. In shared mode Pi
-and omp write into the host `~/.pi/agent` and `~/.omp` trees instead.
+The isolated profile's own cache (`.../cache/opencode`) is writable.
 
-### The agent cannot find a session
+### OpenCode cannot find a session
 
 You are using `--isolated` (or `--profile`). Host sessions are not part of
 that profile. Either drop it to use the default shared state:
 
 ```sh
 kandor
-kandor --agent pi
-kandor --agent omp
 ```
 
-or export/import sessions with the agent's own tooling (`opencode session
-export` / `session import`, `omp session pack` / `unpack`). Isolated-profile
-OAuth logins also need to be repeated per profile: `kandor --isolated auth
-login`, `kandor --isolated --agent omp -- login`, or `/login` inside Pi.
+or export/import sessions with `opencode session export` / `session import`.
+Isolated-profile OAuth logins also need to be repeated per profile:
+`kandor --isolated auth login`.
 
 ### Terminal resizing / TIOCSTI
 
@@ -602,12 +491,10 @@ kandor --new-session      # TIOCSTI protection, resize may not work
 
 ### Shared mode changed my host state
 
-Shared mode (the default) is deliberately read-write for host state. For
-OpenCode, config, state and cache are temporary copies, so config/plugin
-changes are discarded, but sessions can be modified. For Pi and omp the
-entire host `~/.pi/agent` / `~/.omp` tree is writable, so settings, plugins,
-caches and stored credentials can change too. Use `--isolated` for untrusted
-work.
+Shared mode (the default) is deliberately read-write for host state.
+Config, state and cache are temporary copies, so config/plugin changes are
+discarded, but sessions and stored logins in the host data directory can be
+modified. Use `--isolated` for untrusted work.
 
 ## Uninstall
 
@@ -627,7 +514,7 @@ make check
 ```
 
 `tests/unit.sh` sources `kandor` and exercises the command-line parser, the
-config loader, the mount planner and the agent command builder without
+config loader, the mount planner and the OpenCode command builder without
 starting a sandbox. `tests/smoke.sh` runs real sandboxes and checks the
 sandbox boundary, private `/tmp`, hidden home, read-only `/etc`, isolated
 profiles, extra mounts, network isolation and host service-password

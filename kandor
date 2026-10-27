@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# kandor - run OpenCode, Pi or oh-my-pi (omp) inside a bubblewrap sandbox.
+# kandor - run OpenCode inside a bubblewrap sandbox.
 #
 # The sandbox is intentionally conservative:
 #   * the host filesystem is mounted read-only at /
 #   * your home directory is replaced by an empty tmpfs
-#   * only the project, the agent's own state directories, and explicitly
+#   * only the project, OpenCode's own state directories, and explicitly
 #     requested paths are writable
 #   * /tmp, /var/tmp, /run, /run/user/$UID, /mnt, /media and /srv are private
 #   * the process gets its own PID/IPC/UTS/user/cgroup namespaces
@@ -17,14 +17,7 @@
 # cannot connect to a background OpenCode service running outside the
 # sandbox.  The host's service credentials are never mounted; isolated
 # profiles write their own service.json with a private port, and --shared
-# uses temporary config/state/cache copies (Pi and omp are the exception:
-# their --shared mode mounts the host's ~/.pi/agent and ~/.omp read-write).
-#
-# Pi and omp keep their entire state in one directory (~/.pi/agent and
-# ~/.omp).  Isolated profiles mount a sandbox-only copy of those trees, so
-# stored provider credentials and host sessions stay outside the sandbox.
-# Shared mode (the default) mounts the host trees read-write, so config
-# changes and logins persist.
+# uses temporary config/state/cache copies.
 #
 # Requires: Linux, bubblewrap >= 0.5 (0.9+ recommended), Bash 4.4+.
 #
@@ -44,41 +37,29 @@ log()  { printf '%s: %s\n' "$PROG" "$*" >&2; }
 warn() { printf '%s: warning: %s\n' "$PROG" "$*" >&2; }
 die()  { printf '%s: error: %s\n' "$PROG" "$*" >&2; exit 1; }
 
-# Map user-facing agent names to the internal identifiers.
-normalize_agent() {
-  case $1 in
-    opencode|oc)          printf '%s\n' opencode ;;
-    pi)                   printf '%s\n' pi ;;
-    omp|oh-my-pi|ohmypi)  printf '%s\n' omp ;;
-    *)                    return 1 ;;
-  esac
-}
-
 usage() {
   cat <<'EOF'
-Run OpenCode, Pi or oh-my-pi inside a bubblewrap sandbox.
+Run OpenCode inside a bubblewrap sandbox.
 
 Usage:
-  kandor [options] [--] [agent arguments...]
+  kandor [options] [--] [opencode arguments...]
 
 The current directory (or --dir) is the only project directory mounted
-read-write.  Your home directory is hidden.  By default the agent shares
-the host's agent state (OpenCode: the host session database; Pi and omp:
-the whole ~/.pi/agent and ~/.omp trees, including stored credentials).
+read-write.  Your home directory is hidden.  By default OpenCode shares
+the host's data directory (sessions and stored logins).
 Use --isolated (or --profile) for a sandbox-only profile
 under ~/.local/share/kandor/<profile>: the host config is copied in once so
 plugins and settings keep working, but host sessions and stored credentials
 are not exposed.
 
 Options:
-  --agent NAME            Agent to run: opencode (default), pi, or omp
   -C, --dir DIR           Project directory (default: current directory)
       --ro PATH           Mount PATH read-only (repeatable)
       --rw PATH           Mount PATH read-write (repeatable)
       --env NAME[=VALUE]  Pass an environment variable into the sandbox
                           (repeatable).  Without =VALUE, the host value is used.
       --isolated          Use a sandbox-only profile instead of host state
-      --shared            Share the host's agent state (default)
+      --shared            Share the host's OpenCode data (default)
       --profile NAME      Isolated profile name (implies --isolated;
                           default: "default")
       --no-seed           Do not copy the host config into a new isolated
@@ -99,39 +80,32 @@ Options:
                           protection; may prevent TUI resize).  Default: on
                           only when the kernel permits TIOCSTI.
       --no-new-session    Keep the controlling terminal (enables TUI resize)
-      --shell             Run a shell inside the sandbox instead of the agent
+      --shell             Run a shell inside the sandbox instead of OpenCode
       --init-config       Create a commented config file at the standard path
                           (or $KANDOR_CONFIG) and exit; never overwrites
-      --set-agent NAME    Save NAME as the default agent in the config file
-                          (creates it if needed) and exit
       --dry-run           Print the bwrap command and exit (environment
                           secrets are redacted; arguments are printed as-is)
       --verbose           Print sandbox details
   -h, --help              Show this help
   -V, --version           Show the wrapper version
 
-Everything after "--" is passed to the agent verbatim.  Unknown options are
-also passed to the agent, so these are equivalent:
+Everything after "--" is passed to OpenCode verbatim.  Unknown options are
+also passed to OpenCode, so these are equivalent:
   kandor --continue
   kandor -- --continue
 
-Only opencode treats a positional directory as the project.  For pi and omp
-use -C/--dir (or their own --cwd) and pass prompts after "--".
+A positional directory is used as the project directory (like -C).
 
 Examples:
   kandor
   kandor -C ~/code/my-project
   kandor run "fix the failing tests"
   kandor -C ~/code/proj --isolated --profile work
-  kandor auth login            # OpenCode: stored in the host data directory
-  kandor --agent omp -- login  # omp: stored in the host ~/.omp
-  kandor --agent omp -C ~/code/my-project
-  kandor --agent pi -C ~/code/my-project -- "fix the failing tests"
-  kandor --agent pi --isolated # Pi: /login inside the isolated profile
+  kandor auth login            # stored in the host data directory
+  kandor --isolated auth login # stored in the isolated profile
   kandor --no-net --shell
   kandor --ro ~/.config/gcloud --rw ~/go -- run "build it"
-  kandor --init-config --agent omp   # create a config defaulting to omp
-  kandor --set-agent pi              # switch the saved default to pi
+  kandor --init-config
   kandor --dry-run
 
 Configuration file:
@@ -145,7 +119,6 @@ Configuration file:
       isolated
       shared
       no-seed
-      agent NAME
       profile NAME
       ssh
       ssh-agent
@@ -159,9 +132,7 @@ Configuration file:
       new-session
       no-new-session
   Lines beginning with # are ignored.  Command-line options are applied
-  after the file and take precedence.  For the agent, the order is:
-  --agent, then KANDOR_AGENT, then the config file's agent directive,
-  then opencode.
+  after the file and take precedence.
 EOF
 }
 
@@ -170,7 +141,6 @@ EOF
 # ---------------------------------------------------------------------------
 
 project_dir=$PWD
-agent=opencode
 # Shared host state is the default.  --isolated (or --profile) opts into a
 # sandbox-only profile.
 isolated=0
@@ -197,7 +167,6 @@ allow_npmrc=0
 protect_git=1
 shell_mode=0
 init_config=0
-set_agent=
 dry_run=0
 verbose=0
 show_help=0
@@ -326,7 +295,11 @@ load_config() {
       isolated)         isolated=1 ;;
       shared)           isolated=0 ;;
       no-seed)          seed_config=0 ;;
-      agent)            agent=$rest ;;
+      agent)
+        # Written by earlier versions, which also supported other agents.
+        [[ $rest == opencode || $rest == oc ]] ||
+          die "only opencode is supported; remove 'agent $rest' from $file"
+        ;;
       profile)          profile=$rest; isolated=1 ;;
       ssh)              allow_ssh=1 ;;
       ssh-agent)        allow_ssh_agent=1 ;;
@@ -346,15 +319,11 @@ load_config() {
 }
 
 config_template() {
-  local agent=$1
-  cat <<EOF
+  cat <<'EOF'
 # kandor configuration file
 #
 # One directive per line.  Lines beginning with '#' are ignored.  Run
 # 'kandor --help' for the full list; command-line options override this file.
-
-# Default agent: opencode, pi, or omp.
-agent $agent
 
 # Extra mounts
 # ro ~/.config/gcloud
@@ -384,54 +353,15 @@ EOF
 # Write a new config file.  Refuse to overwrite an existing file so a typo in
 # KANDOR_CONFIG cannot destroy the user's settings.
 write_default_config() {
-  local file=$1 agent=$2 dir
+  local file=$1 dir
   [[ -e $file ]] && die "configuration file already exists: $file"
   dir=${file%/*}
   [[ $dir == "$file" ]] && dir=.
   mkdir -p -- "$dir" || die "cannot create configuration directory: $dir"
   chmod 700 -- "$dir" 2>/dev/null || true
-  ( umask 077; config_template "$agent" > "$file" ) ||
+  ( umask 077; config_template > "$file" ) ||
     die "cannot write configuration file: $file"
   chmod 600 -- "$file" 2>/dev/null || true
-}
-
-# Add or replace the agent directive, preserving every other line.  This also
-# works when the file was created by hand and has no agent directive yet.
-persist_agent() {
-  local file=$1 agent=$2 dir tmp
-  if [[ ! -e $file ]]; then
-    write_default_config "$file" "$agent"
-    return 0
-  fi
-
-  # Dotfile managers often symlink the config file.  Replace the target, not
-  # the link, so the managed copy is the one that changes.
-  if [[ -L $file ]]; then
-    file=$(resolve_path "$file") || die "cannot resolve configuration file: $1"
-  fi
-
-  dir=${file%/*}
-  [[ $dir == "$file" ]] && dir=.
-  tmp=$(mktemp "$dir/.kandor-config.XXXXXX") ||
-    die "cannot create a temporary file in $dir"
-  if ! awk -v directive="agent $agent" '
-      BEGIN { done = 0 }
-      /^[[:space:]]*#/ { print; next }
-      /^[[:space:]]*agent([[:space:]]|$)/ {
-        if (!done) { print directive; done = 1 }
-        next
-      }
-      { print }
-      END { if (!done) print directive }
-    ' "$file" > "$tmp"; then
-    rm -f -- "$tmp"
-    die "cannot update configuration file: $file"
-  fi
-  chmod 600 -- "$tmp" 2>/dev/null || true
-  mv -f -- "$tmp" "$file" || {
-    rm -f -- "$tmp"
-    die "cannot replace configuration file: $file"
-  }
 }
 
 # ---------------------------------------------------------------------------
@@ -680,51 +610,7 @@ cleanup() {
 # path resolution happen in main() afterwards, so --help and --version can
 # short-circuit before any filesystem work.
 parse_args() {
-  local args i arg normalized invalid_agent
-
-  # The configuration file is loaded before this function runs.  An explicit
-  # environment value overrides it; --agent on the command line wins last.
-  [[ -n ${KANDOR_AGENT:-} ]] && agent=$KANDOR_AGENT
-
-  # The agent decides how positional arguments are interpreted during the main
-  # parse (early exit), so it must be resolved before that loop starts.  The
-  # prescan stops where the main loop hands arguments to the agent (the first
-  # positional argument, unknown option or "--"), so an agent's own --agent
-  # flag (for example "opencode run --agent plan") is never mistaken for
-  # ours.  --help and --version also stop it.
-  args=("$@")
-  for ((i = 0; i < ${#args[@]}; i++)); do
-    arg=${args[$i]}
-    case $arg in
-      -h|--help|-V|--version|--) break ;;
-      --agent)
-        ((i + 1 < ${#args[@]})) && agent=${args[$((i + 1))]}
-        i=$((i + 1))
-        ;;
-      --agent=*)
-        agent=${arg#*=}
-        ;;
-      -C|--dir|--project|--ro|--rw|--env|--profile|--set-agent|--set-default-agent)
-        i=$((i + 1))
-        ;;
-      --set-agent=*|--set-default-agent=*) ;;
-      --isolated|--shared|--no-seed|--net|--no-net|--ssh|--ssh-agent|\
-      --git-credentials|--netrc|--npmrc|--no-gitconfig|--protect-git|\
-      --no-protect-git|--allow-userns|--new-session|--no-new-session|--shell|\
-      --init-config|--dry-run|--print-command|--verbose) ;;
-      *) break ;;
-    esac
-  done
-  # An invalid default (from KANDOR_AGENT or the config file) must not block
-  # --help, --version or --set-agent, which is how a bad default is repaired.
-  # It is reported after the main loop instead.
-  invalid_agent=
-  if ! normalized=$(normalize_agent "$agent"); then
-    invalid_agent=$agent
-    normalized=$agent
-  fi
-  agent=$normalized
-
+  # The configuration file is loaded before this function runs.
   while (($#)); do
     case $1 in
       -h|--help)
@@ -734,19 +620,6 @@ parse_args() {
       -V|--version)
         show_version=1
         return 0
-        ;;
-      --agent)
-        (($# >= 2)) || die "--agent requires a name"
-        agent=$(normalize_agent "$2") ||
-          die "unknown agent '$2' (use opencode, pi or omp)"
-        invalid_agent=
-        shift 2
-        ;;
-      --agent=*)
-        agent=$(normalize_agent "${1#*=}") ||
-          die "unknown agent '${1#*=}' (use opencode, pi or omp)"
-        invalid_agent=
-        shift
         ;;
       -C|--dir|--project)
         (($# >= 2)) || die "$1 requires a directory argument"
@@ -848,17 +721,6 @@ parse_args() {
         init_config=1
         shift
         ;;
-      --set-agent|--set-default-agent)
-        (($# >= 2)) || die "$1 requires an agent name"
-        set_agent=$(normalize_agent "$2") ||
-          die "unknown agent '$2' (use opencode, pi or omp)"
-        shift 2
-        ;;
-      --set-agent=*|--set-default-agent=*)
-        set_agent=$(normalize_agent "${1#*=}") ||
-          die "unknown agent '${1#*=}' (use opencode, pi or omp)"
-        shift
-        ;;
       --dry-run|--print-command)
         dry_run=1
         shift
@@ -873,39 +735,31 @@ parse_args() {
         break
         ;;
       -*)
-        # Not one of our options: hand it (and everything after it) to the
-        # agent.  This keeps top-level flags such as --continue working.
+        # Not one of our options: hand it (and everything after it) to
+        # OpenCode.  This keeps top-level flags such as --continue working.
         oc_args+=("$@")
         break
         ;;
       *)
-        if [[ $agent == opencode ]]; then
-          # OpenCode's top-level positional argument is a directory.  Treat an
-          # existing directory as the project, unless it is a subcommand name.
-          # Pi and omp take prompts and files positionally, so only opencode
-          # gets this convenience.
-          case $1 in
-            run|auth|mcp|plugin|debug|session|api|serve|acp|mini|models|stats|\
-            pair|reload|service|upgrade|update|uninstall|completions)
-              oc_args+=("$@")
-              break
-              ;;
-          esac
-          if [[ -d $1 ]]; then
-            project_dir=$1
-            shift
-            continue
-          fi
+        # OpenCode's top-level positional argument is a directory.  Treat an
+        # existing directory as the project, unless it is a subcommand name.
+        case $1 in
+          run|auth|mcp|plugin|debug|session|api|serve|acp|mini|models|stats|\
+          pair|reload|service|upgrade|update|uninstall|completions)
+            oc_args+=("$@")
+            break
+            ;;
+        esac
+        if [[ -d $1 ]]; then
+          project_dir=$1
+          shift
+          continue
         fi
         oc_args+=("$@")
         break
         ;;
     esac
   done
-
-  if [[ -n $invalid_agent && -z $set_agent ]]; then
-    die "unknown agent '$invalid_agent' (use opencode, pi or omp; fix it with --set-agent)"
-  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -1010,36 +864,19 @@ build_mounts() {
     protect_git_dirs "$git_common" "$git_dir"
   fi
 
-  # The agent's persistent state.
-  case $agent in
-    opencode)
-      add_rw "$config_dir"
-      add_rw "$data_dir"
-      add_rw "$state_dir"
-      add_rw "$cache_dir"
-      if (( ! isolated )) && [[ -d $xdg_cache/opencode/bin ]]; then
-        # Reuse the host's cached ripgrep binary without exposing the host cache
-        # (and its npm packages) read-write.
-        add_ro "$xdg_cache/opencode/bin" "$cache_dir/bin"
-        add_ro_symlink_targets "$xdg_cache/opencode/bin"
-      fi
-      ;;
-    pi)
-      # Isolated profiles bind a sandbox-only agent directory; shared mode
-      # binds the host tree read-write so config edits and logins persist.
-      if [[ -d $pi_agent_dir ]]; then
-        add_rw "$pi_agent_dir" "$HOME/.pi/agent"
-      else
-        die "Pi agent directory does not exist: $pi_agent_dir"
-      fi
-      ;;
-    omp)
-      # Isolated profiles bind the profile tree; --shared binds the host tree.
-      add_rw "$omp_root" "$HOME/.omp"
-      ;;
-  esac
+  # OpenCode's persistent state.
+  add_rw "$config_dir"
+  add_rw "$data_dir"
+  add_rw "$state_dir"
+  add_rw "$cache_dir"
+  if (( ! isolated )) && [[ -d $xdg_cache/opencode/bin ]]; then
+    # Reuse the host's cached ripgrep binary without exposing the host cache
+    # (and its npm packages) read-write.
+    add_ro "$xdg_cache/opencode/bin" "$cache_dir/bin"
+    add_ro_symlink_targets "$xdg_cache/opencode/bin"
+  fi
 
-  # The agent (or debug shell) binary and the runtime/user tool directories.
+  # The OpenCode (or debug shell) binary and the runtime/user tool directories.
   if (( shell_mode )); then
     bin_dir=$(dirname "$shell_bin")
   else
@@ -1161,33 +998,13 @@ build_mounts() {
 build_agent_command() {
   # --standalone is a per-command flag in OpenCode, not a global flag before a
   # subcommand.  Drop a leading one and re-insert it in the right place below.
-  if [[ $agent == opencode && ${oc_args[0]:-} == --standalone ]]; then
+  if [[ ${oc_args[0]:-} == --standalone ]]; then
     oc_args=("${oc_args[@]:1}")
   fi
 
   if (( shell_mode )); then
     cmd=("$shell_bin" -l)
     ((${#oc_args[@]})) && cmd+=("${oc_args[@]}")
-  elif [[ $agent != opencode ]]; then
-    # Pi and omp receive their arguments verbatim.  There is no service to
-    # isolate; both keep their own state under the sandbox profile.
-    first_arg=
-    for arg in "${oc_args[@]}"; do
-      [[ $arg == -* ]] && continue
-      first_arg=$arg
-      break
-    done
-    if [[ $agent == omp && $first_arg == update ]]; then
-      die "refusing to run 'omp update' inside the sandbox; update omp on the host"
-    fi
-    if [[ $agent == pi && $first_arg == update ]]; then
-      case ${oc_args[1]:-} in
-        self|pi)
-          die "refusing to run 'pi update ${oc_args[1]}' inside the sandbox; update pi on the host"
-          ;;
-      esac
-    fi
-    cmd=("$oc_bin" "${oc_args[@]}")
   else
     # Refuse commands that would talk to the host's background service or
     # manage the host installation.
@@ -1307,15 +1124,10 @@ main() {
     exit 0
   fi
 
-  if (( init_config )) || [[ -n $set_agent ]]; then
+  if (( init_config )); then
     config_file=${KANDOR_CONFIG:-$default_config}
-    if [[ -n $set_agent ]]; then
-      persist_agent "$config_file" "$set_agent"
-      log "default agent set to $set_agent in $config_file"
-    else
-      write_default_config "$config_file" "$agent"
-      log "created $config_file (default agent: $agent)"
-    fi
+    write_default_config "$config_file"
+    log "created $config_file"
     exit 0
   fi
 
@@ -1385,19 +1197,14 @@ EOF
     shell_bin=$(resolve_path "$shell_bin") || shell_bin=/bin/bash
     oc_bin=
   else
-    case $agent in
-      opencode) agent_name=opencode ;;
-      pi)       agent_name=pi ;;
-      omp)      agent_name=omp ;;
-    esac
     oc_bin=${KANDOR_BIN:-}
     if [[ -z $oc_bin ]]; then
-      oc_bin=$(type -P "$agent_name" || true)
+      oc_bin=$(type -P opencode || true)
     fi
     [[ -n $oc_bin ]] ||
-      die "$agent_name was not found in PATH (set KANDOR_BIN to override)"
-    oc_bin=$(resolve_path "$oc_bin") || die "cannot resolve the $agent_name binary"
-    [[ -x $oc_bin ]] || die "$agent_name is not executable: $oc_bin"
+      die "opencode was not found in PATH (set KANDOR_BIN to override)"
+    oc_bin=$(resolve_path "$oc_bin") || die "cannot resolve the opencode binary"
+    [[ -x $oc_bin ]] || die "opencode is not executable: $oc_bin"
   fi
 
   xdg_config=$(resolve_path_maybe "${XDG_CONFIG_HOME:-$HOME/.config}")
@@ -1439,155 +1246,47 @@ EOF
     sandbox_xdg_state=$shared_tmp/state
     sandbox_xdg_cache=$shared_tmp/cache
     # OpenCode needs the real data directory for the shared session database.
-    # Pi and omp keep their state outside XDG, so their XDG directories stay
-    # private as well.
-    if [[ $agent == opencode ]]; then
-      sandbox_xdg_data=$xdg_data
-    else
-      sandbox_xdg_data=$shared_tmp/data
-    fi
+    sandbox_xdg_data=$xdg_data
     mkdir -p -- "$sandbox_xdg_config" "$sandbox_xdg_state" \
-                "$sandbox_xdg_cache" "$sandbox_xdg_data" ||
+                "$sandbox_xdg_cache" ||
       die "cannot create the temporary shared profile"
   fi
 
-  case $agent in
-    opencode)
-      config_dir=$sandbox_xdg_config/opencode
-      data_dir=$sandbox_xdg_data/opencode
-      state_dir=$sandbox_xdg_state/opencode
-      cache_dir=$sandbox_xdg_cache/opencode
+  config_dir=$sandbox_xdg_config/opencode
+  data_dir=$sandbox_xdg_data/opencode
+  state_dir=$sandbox_xdg_state/opencode
+  cache_dir=$sandbox_xdg_cache/opencode
 
-      mkdir -p -- "$config_dir" "$data_dir" "$state_dir" "$cache_dir" ||
-        die "cannot create OpenCode's config/data/state/cache directories"
+  mkdir -p -- "$config_dir" "$data_dir" "$state_dir" "$cache_dir" ||
+    die "cannot create OpenCode's config/data/state/cache directories"
 
-      if (( isolated && seed_config )); then
-        # Copy the host config into a brand-new profile once.  This keeps plugins
-        # and settings working without exposing the host's session database.
-        if [[ ! -e $config_dir/.kandor-seeded ]]; then
-          shopt -s nullglob
-          for f in "$xdg_config/opencode"/*; do
-            base=${f##*/}
-            [[ $base == service.json ]] && continue
-            cp -aL -- "$f" "$config_dir/" 2>/dev/null ||
-              warn "could not copy $f into the sandbox profile"
-          done
-          shopt -u nullglob
-          : > "$config_dir/.kandor-seeded" 2>/dev/null || true
-        fi
-      elif (( ! isolated )); then
-        # Config, state and cache are private copies in shared mode so the
-        # host's plugin/config changes are discarded when the run exits.
-        shopt -s nullglob
-        for f in "$xdg_config/opencode"/*; do
-          base=${f##*/}
-          [[ $base == service.json ]] && continue
-          cp -aL -- "$f" "$config_dir/" 2>/dev/null ||
-            warn "could not copy $f into the shared sandbox profile"
-        done
-        shopt -u nullglob
-        warn "sharing the host OpenCode data directory read-write (sessions and stored logins in auth.json); config, state and cache use temporary copies"
-      fi
-      ;;
-    pi)
-      # Pi stores everything under one agent directory (~/.pi/agent).  An
-      # isolated profile mounts a sandbox-only copy; shared mode mounts the
-      # host directory read-write so config changes and logins persist.
-      if (( isolated )); then
-        pi_root=$profile_root/pi
-        pi_agent_dir=$pi_root/agent
-        mkdir -p -- "$pi_agent_dir" ||
-          die "cannot create the Pi profile at $pi_root"
-
-        if (( seed_config )); then
-          if [[ ! -e $pi_agent_dir/.kandor-seeded ]]; then
-            # Copy only known configuration and add-on entries.  Credentials
-            # (auth.json, mcp-auth.json, API keys in models.json), sessions
-            # and anything unrecognised stay on the host.
-            skipped=()
-            shopt -s nullglob
-            for f in "$HOME/.pi/agent"/*; do
-              base=${f##*/}
-              case $base in
-                settings.json|keybindings.json|AGENTS.md|SYSTEM.md|\
-                APPEND_SYSTEM.md|extensions|skills|prompts|themes|npm|git|\
-                bin|memory) ;;
-                auth.json|mcp-auth.json|sessions) continue ;;
-                *) skipped+=("$base"); continue ;;
-              esac
-              cp -aL -- "$f" "$pi_agent_dir/" 2>/dev/null ||
-                warn "could not copy $f into the sandbox profile"
-            done
-            shopt -u nullglob
-            if ((${#skipped[@]})); then
-              warn "not copied into the Pi profile: ${skipped[*]}"
-              warn "copy them into $pi_agent_dir by hand if the profile needs them"
-            fi
-            : > "$pi_agent_dir/.kandor-seeded" 2>/dev/null || true
-          fi
-        fi
-      else
-        pi_agent_dir=$HOME/.pi/agent
-        mkdir -p -- "$pi_agent_dir" ||
-          die "cannot create $pi_agent_dir for shared mode"
-        warn "sharing the entire host ~/.pi/agent read-write; sessions, settings and stored credentials are exposed, and extensions the sandbox installs there run unsandboxed in host pi (use --isolated for untrusted work)"
-      fi
-      ;;
-    omp)
-      # omp keeps config, sessions and caches under ~/.omp.  An isolated
-      # profile mounts a sandbox-only tree there; --shared mounts the host's
-      # whole ~/.omp read-write instead.
-      if (( isolated )); then
-        omp_root=$profile_root/omp
-        mkdir -p -- "$omp_root/agent" ||
-          die "cannot create the omp profile at $omp_root"
-
-        if (( seed_config )); then
-          if [[ ! -e $omp_root/.kandor-seeded ]]; then
-            for src in "$HOME/.omp/agent/config.yml" \
-                       "$HOME/.omp/agent/config.yaml" \
-                       "$HOME/.omp/agent/AGENTS.md" \
-                       "$HOME/.omp/agent/settings.json" \
-                       "$HOME/.omp/agent/commands" \
-                       "$HOME/.omp/agent/prompts" \
-                       "$HOME/.omp/agent/skills" \
-                       "$HOME/.omp/agent/themes" \
-                       "$HOME/.omp/agent/tools" \
-                       "$HOME/.omp/agent/modules" \
-                       "$HOME/.omp/agent/memories" \
-                       "$HOME/.omp/agent/agents" \
-                       "$HOME/.omp/plugins" \
-                       "$HOME/.omp/marketplaces.json"; do
-              [[ -e $src ]] || continue
-              case $src in
-                "$HOME/.omp/plugins")
-                  # Plugin node_modules may contain symlinks into the host's
-                  # package cache; preserve them instead of dereferencing.
-                  cp -a -- "$src" "$omp_root/plugins" 2>/dev/null ||
-                    warn "could not copy $src into the sandbox profile"
-                  ;;
-                "$HOME/.omp/marketplaces.json")
-                  cp -aL -- "$src" "$omp_root/marketplaces.json" 2>/dev/null ||
-                    warn "could not copy $src into the sandbox profile"
-                  ;;
-                *)
-                  cp -aL -- "$src" "$omp_root/agent/${src#"$HOME/.omp/agent/"}" \
-                    2>/dev/null ||
-                    warn "could not copy $src into the sandbox profile"
-                  ;;
-              esac
-            done
-            : > "$omp_root/.kandor-seeded" 2>/dev/null || true
-          fi
-        fi
-      else
-        omp_root=$HOME/.omp
-        mkdir -p -- "$omp_root" ||
-          die "cannot create $omp_root for shared mode"
-        warn "sharing the entire host ~/.omp read-write; sessions, settings and stored credentials are exposed, and plugins the sandbox installs there run unsandboxed in host omp (use --isolated for untrusted work)"
-      fi
-      ;;
-  esac
+  if (( isolated && seed_config )); then
+    # Copy the host config into a brand-new profile once.  This keeps plugins
+    # and settings working without exposing the host's session database.
+    if [[ ! -e $config_dir/.kandor-seeded ]]; then
+      shopt -s nullglob
+      for f in "$xdg_config/opencode"/*; do
+        base=${f##*/}
+        [[ $base == service.json ]] && continue
+        cp -aL -- "$f" "$config_dir/" 2>/dev/null ||
+          warn "could not copy $f into the sandbox profile"
+      done
+      shopt -u nullglob
+      : > "$config_dir/.kandor-seeded" 2>/dev/null || true
+    fi
+  elif (( ! isolated )); then
+    # Config, state and cache are private copies in shared mode so the
+    # host's plugin/config changes are discarded when the run exits.
+    shopt -s nullglob
+    for f in "$xdg_config/opencode"/*; do
+      base=${f##*/}
+      [[ $base == service.json ]] && continue
+      cp -aL -- "$f" "$config_dir/" 2>/dev/null ||
+        warn "could not copy $f into the shared sandbox profile"
+    done
+    shopt -u nullglob
+    warn "sharing the host OpenCode data directory read-write (sessions and stored logins in auth.json); config, state and cache use temporary copies"
+  fi
 
   if (( new_session && ! new_session_explicit )); then
     warn "TIOCSTI is enabled on this kernel; using --new-session for safety"
@@ -1595,10 +1294,7 @@ EOF
   fi
 
   uid=$(id -u)
-  service_port=
-  if [[ $agent == opencode ]]; then
-    service_port=$(find_free_port 2>/dev/null || true)
-  fi
+  service_port=$(find_free_port 2>/dev/null || true)
   runtime_dir=${XDG_RUNTIME_DIR:-/run/user/$uid}
   runtime_dir=$(resolve_path_maybe "$runtime_dir")
   if [[ ! -d $runtime_dir ]]; then
@@ -1613,24 +1309,21 @@ EOF
   # Service credentials.  Both profile modes use a writable, private config and
   # state directory, so OpenCode can create and update its own service.json.
   # A free port prevents a sandbox service from colliding with the host service.
-  # Pi and omp do not use OpenCode's service registration.
-  if [[ $agent == opencode ]]; then
-    if [[ -n $service_port ]]; then
-      service_content=$(printf '{"port": %s}' "$service_port")
-    else
-      service_content='{}'
-      warn "could not find a free TCP port for OpenCode's private service"
-    fi
-
-    rm -f -- "$config_dir/service.json" "$state_dir/service.json" 2>/dev/null || true
-    if ! { printf '%s\n' "$service_content" > "$config_dir/service.json"; } 2>/dev/null; then
-      warn "could not write $config_dir/service.json"
-    fi
-    if ! { printf '{}\n' > "$state_dir/service.json"; } 2>/dev/null; then
-      warn "could not write $state_dir/service.json"
-    fi
-    chmod 600 "$config_dir/service.json" "$state_dir/service.json" 2>/dev/null || true
+  if [[ -n $service_port ]]; then
+    service_content=$(printf '{"port": %s}' "$service_port")
+  else
+    service_content='{}'
+    warn "could not find a free TCP port for OpenCode's private service"
   fi
+
+  rm -f -- "$config_dir/service.json" "$state_dir/service.json" 2>/dev/null || true
+  if ! { printf '%s\n' "$service_content" > "$config_dir/service.json"; } 2>/dev/null; then
+    warn "could not write $config_dir/service.json"
+  fi
+  if ! { printf '{}\n' > "$state_dir/service.json"; } 2>/dev/null; then
+    warn "could not write $state_dir/service.json"
+  fi
+  chmod 600 "$config_dir/service.json" "$state_dir/service.json" 2>/dev/null || true
 
   # -------------------------------------------------------------------------
   # Namespaces and security options
@@ -1694,14 +1387,7 @@ EOF
   setenv XDG_CACHE_HOME "$sandbox_xdg_cache"
   setenv XDG_RUNTIME_DIR "$runtime_dir"
   setenv LANG "${LANG:-C.UTF-8}"
-  if [[ $agent == opencode ]]; then
-    setenv OPENCODE_DISABLE_AUTOUPDATE 1
-  elif [[ $agent == pi ]]; then
-    # In an isolated profile this is the sandbox-only agent directory; in
-    # shared mode it is the host ~/.pi/agent tree mounted read-write.
-    setenv PI_CODING_AGENT_DIR "$HOME/.pi/agent"
-    (( isolated )) || setenv PI_CODING_AGENT_SESSION_DIR "$HOME/.pi/agent/sessions"
-  fi
+  setenv OPENCODE_DISABLE_AUTOUPDATE 1
 
   [[ -n ${COLORTERM:-} ]] && setenv COLORTERM "$COLORTERM"
   [[ -n ${NO_COLOR:-} ]] && setenv NO_COLOR "$NO_COLOR"
@@ -1730,9 +1416,6 @@ EOF
       OPENCODE|OPENCODE_SESSION_ID|OPENCODE_CLIENT|OPENCODE_TERMINAL|\
       OPENCODE_PASSWORD|OPENCODE_SERVER_PASSWORD|OPENCODE_DB|OPENCODE_CONFIG|\
       OPENCODE_CONFIG_DIR|OPENCODE_CONFIG_CONTENT|AI_AGENT|SSH_AUTH_SOCK|\
-      PI_SESSION_FILE|PI_SESSION_ID|PI_CODING_AGENT|PI_CODING_AGENT_DIR|\
-      PI_CODING_AGENT_SESSION_DIR|PI_PROFILE|OMP_PROFILE|OMP_AUTH_BROKER_URL|\
-      OMP_AUTH_BROKER_TOKEN|\
       DBUS_SESSION_BUS_ADDRESS|DISPLAY|WAYLAND_DISPLAY|XAUTHORITY)
         continue
         ;;
@@ -1788,16 +1471,11 @@ EOF
   build_agent_command
 
   if (( verbose )); then
-    log "agent:    $agent"
     log "project:  $project_dir"
     if (( isolated )); then
       log "profile:  $profile ($profile_root)"
-    elif [[ $agent == opencode ]]; then
-      log "profile:  shared sessions (private config/state/cache copy)"
-    elif [[ $agent == pi ]]; then
-      log "profile:  shared host $HOME/.pi/agent tree"
     else
-      log "profile:  shared host $HOME/.omp tree"
+      log "profile:  shared sessions (private config/state/cache copy)"
     fi
     log "network:  $([[ $network == 1 ]] && echo shared || echo isolated)"
     log "runtime:  $runtime_dir"
