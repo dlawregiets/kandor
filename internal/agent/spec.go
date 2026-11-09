@@ -47,6 +47,31 @@ var builtinSpecs = []Spec{
 		// parent session.  Neither may flow back in.
 		EnvExclude: []string{"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"},
 	},
+	{
+		// Probed against pi 1.4.0 (pi --help).  Global settings and
+		// sessions live under ~/.pi; copy the tree so the sandbox never
+		// touches the host's.
+		Name: "pi",
+		Subcommands: []string{
+			"install", "remove", "uninstall", "update", "list",
+			"config", "auth", "mcp",
+		},
+		Copy:       []string{"~/.pi"},
+		EnvExclude: []string{"PI_"},
+	},
+	{
+		// Probed against Copilot CLI 1.0.101 (copilot --help).  The user
+		// settings file is ~/.copilot/settings.json (COPILOT_HOME
+		// relocates it, which cannot be expressed here).
+		Name: "copilot",
+		Subcommands: []string{
+			"app", "login", "help", "init", "config", "update", "version",
+			"workflow", "sessions", "memories", "plugin", "mcp", "skill",
+			"instruction", "lsp", "sandbox", "completion",
+		},
+		Copy:       []string{"~/.copilot"},
+		EnvExclude: []string{"COPILOT_"},
+	},
 }
 
 // builtin returns the built-in defaults for a known agent.  OpenCode keeps

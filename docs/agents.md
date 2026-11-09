@@ -5,12 +5,15 @@ then `KANDOR_AGENT`, then the user file's `default_agent`, then `opencode`.
 Unknown names are rejected with the list of known agents (built-ins plus
 every `[agents.<name>]` in the user file).
 
-| Agent | Kind | State by default |
+| Agent | Probed version | State by default |
 | --- | --- | --- |
-| `opencode` | Built-in, bespoke behavior | Unchanged: shared host data, or an isolated profile |
-| `claude` | Built-in paths (probed: Claude Code 2.1.319) | `~/.claude` + `~/.claude.json` copied into the profile |
-| `pi` | Config-only (probed: pi 1.4.0) | You declare it; snippet below |
-| `copilot` | Config-only (probed: Copilot CLI 1.0.101) | You declare it; snippet below |
+| `opencode` | — | Unchanged: shared host data, or an isolated profile |
+| `claude` | Claude Code 2.1.319 | `~/.claude` + `~/.claude.json` copied into the profile |
+| `pi` | pi 1.4.0 | `~/.pi` copied into the profile |
+| `copilot` | Copilot CLI 1.0.101 | `~/.copilot` copied into the profile |
+
+Every built-in is just defaults: `[agents.<name>]` in the user file overrides
+the binary, adds paths, or replaces the environment exclusions.
 
 ## OpenCode
 
@@ -40,47 +43,29 @@ Login options, easiest first:
 copy = ["~/.claude-work", "~/.claude-work.json"]
 ```
 
-## Pi (config-only)
+## Pi
 
-Paths and subcommands below come from `pi --help` (pi 1.4.0): global
-settings live in `~/.pi/agent/settings.json`, sessions in
-`~/.pi/agent/sessions/`, and it understands `PI_OFFLINE=1`. Drop this into
-the user file (adjust if a later pi moves things):
+Probed from `pi --help` (pi 1.4.0): global settings live in
+`~/.pi/agent/settings.json` and sessions in `~/.pi/agent/sessions/`. The
+built-in descriptor copies `~/.pi` into the profile and keeps host `PI_*`
+variables out (`PI_OFFLINE` and friends would otherwise point at host state).
+
+Provider keys (`ANTHROPIC_API_KEY` and friends) are forwarded automatically;
+`pi auth` on the host covers OAuth logins before the first copy. If you keep
+pi's state elsewhere, override the paths:
 
 ```toml
-[agents.pi]
-binary = "pi"
-subcommands = ["install", "remove", "uninstall", "update", "list", "config", "auth", "mcp"]
-
 [agents.pi.paths]
-copy = ["~/.pi"]
-
-[agents.pi.env]
-exclude = ["PI_"]
+copy = ["~/alt-pi"]
 ```
 
-`copy` carries pi's settings and any stored login into the profile;
-`exclude` keeps host `PI_*` variables out. Provider keys (`ANTHROPIC_API_KEY`
-and friends) are forwarded automatically; `pi auth` on the host covers OAuth
-logins before the first copy.
+## Copilot
 
-## Copilot (config-only)
-
-From `copilot --help` (Copilot CLI 1.0.101): the user settings file is
-`settings.json` in `~/.copilot` (or `$COPILOT_HOME` when set). Drop this
-into the user file:
-
-```toml
-[agents.copilot]
-binary = "copilot"
-subcommands = ["app", "login", "help", "init", "config", "update", "version", "workflow", "sessions", "memories", "plugin", "mcp", "skill", "instruction", "lsp", "sandbox", "completion"]
-
-[agents.copilot.paths]
-copy = ["~/.copilot"]
-
-[agents.copilot.env]
-exclude = ["COPILOT_"]
-```
+Probed from `copilot --help` (Copilot CLI 1.0.101): the user settings file is
+`settings.json` in `~/.copilot` (`$COPILOT_HOME` relocates it; the built-in
+assumes the default). The descriptor copies `~/.copilot` into the profile and
+excludes host `COPILOT_*` variables, since `COPILOT_HOME` would otherwise
+point the sandbox at host state.
 
 `copilot login` is a device flow that needs a host browser, so authenticate
 on the host first. `GH_TOKEN`/`GITHUB_TOKEN` pass through with `--env` when

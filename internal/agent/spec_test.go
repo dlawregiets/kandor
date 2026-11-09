@@ -24,24 +24,28 @@ func TestResolveBuiltinDefaults(t *testing.T) {
 func TestResolveMergesUserSection(t *testing.T) {
 	cfg := config.AgentSection{
 		Binary:      ptr("/x/claude"),
-		Subcommands: []string{"mcp", "run"},
+		Subcommands: []string{"extra", "mcp"},
 		Paths: config.AgentPaths{
 			Share: []string{"~/share"},
 			Copy:  []string{"~/copy"},
 		},
-		Env: config.AgentEnv{Exclude: []string{"CLAUDECODE", "OPENCODE_SESSION_ID"}},
+		Env: config.AgentEnv{Exclude: []string{"CLAUDECODE", "PI_"}},
 	}
 	s := Resolve("pi", cfg)
 	if s.Binary != "/x/claude" {
 		t.Errorf("Binary = %q", s.Binary)
 	}
-	if !slices.Equal(s.Subcommands, []string{"mcp", "run"}) {
-		t.Errorf("Subcommands = %q", s.Subcommands)
+	// Built-in subcommands stay, new ones append, duplicates drop.
+	want := append([]string{"install", "remove", "uninstall", "update", "list", "config", "auth", "mcp"}, "extra")
+	if !slices.Equal(s.Subcommands, want) {
+		t.Errorf("Subcommands = %q, want %q", s.Subcommands, want)
 	}
-	if !slices.Equal(s.Share, []string{"~/share"}) || !slices.Equal(s.Copy, []string{"~/copy"}) {
+	// Built-in copies stay, user paths append.
+	if !slices.Equal(s.Share, []string{"~/share"}) ||
+		!slices.Equal(s.Copy, []string{"~/.pi", "~/copy"}) {
 		t.Errorf("paths = %+v", s)
 	}
-	if !slices.Equal(s.EnvExclude, []string{"CLAUDECODE", "OPENCODE_SESSION_ID"}) {
+	if !slices.Equal(s.EnvExclude, []string{"PI_", "CLAUDECODE"}) {
 		t.Errorf("EnvExclude = %q", s.EnvExclude)
 	}
 }
@@ -150,5 +154,36 @@ func TestBuiltinClaude(t *testing.T) {
 	s = Resolve("claude", config.AgentSection{Binary: ptr("/opt/claude")})
 	if s.Binary != "/opt/claude" || len(s.Copy) != 2 {
 		t.Errorf("override = %+v", s)
+	}
+}
+
+func TestBuiltinPiAndCopilot(t *testing.T) {
+	pi := Resolve("pi", config.AgentSection{})
+	if pi.Binary != "pi" || !slices.Equal(pi.Copy, []string{"~/.pi"}) ||
+		!slices.Equal(pi.EnvExclude, []string{"PI_"}) || !slices.Contains(pi.Subcommands, "auth") {
+		t.Errorf("pi = %+v", pi)
+	}
+	copilot := Resolve("copilot", config.AgentSection{})
+	if copilot.Binary != "copilot" || !slices.Equal(copilot.Copy, []string{"~/.copilot"}) ||
+		!slices.Equal(copilot.EnvExclude, []string{"COPILOT_"}) || !slices.Contains(copilot.Subcommands, "login") {
+		t.Errorf("copilot = %+v", copilot)
+	}
+	// User configuration still overrides a built-in.
+	copilot = Resolve("copilot", config.AgentSection{Binary: ptr("/opt/copilot")})
+	if copilot.Binary != "/opt/copilot" || len(copilot.Copy) != 1 {
+		t.Errorf("override = %+v", copilot)
+	}
+}
+
+func TestBuiltinExcludePrefixes(t *testing.T) {
+	ag := For("pi", config.AgentSection{})
+	for _, name := range []string{"PI_OFFLINE", "PI_", "PI"} {
+		want := name != "PI"
+		if got := ag.ExcludeEnv(name); got != want {
+			t.Errorf("pi.ExcludeEnv(%q) = %v, want %v", name, got, want)
+		}
+	}
+	if ag.ExcludeEnv("ANTHROPIC_API_KEY") {
+		t.Error("pi blocked a provider key")
 	}
 }
