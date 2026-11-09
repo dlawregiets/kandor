@@ -7,6 +7,7 @@ Run `kandor --help` for the full list. Common options:
 | Option | Meaning |
 | --- | --- |
 | `--init-config` | Create a commented config file and exit |
+| `--init-project` | Create `.kandor.toml` in the project, prompting for sections |
 | `--migrate-config` | Convert the old line-based config file to `config.toml` |
 | `-C, --dir DIR` | Project directory (default: `$PWD`) |
 | `--ro PATH` | Extra read-only mount (repeatable) |
@@ -124,6 +125,9 @@ credentials, ...) print a `kandor: warning:` naming the file and the keys.
 
 Create a commented starter file with `kandor --init-config` (it uses
 `$KANDOR_CONFIG` when that is set and never overwrites an existing file).
+`kandor --init-project` (optionally with `-C`) writes a `.kandor.toml`
+starter into the project directory instead, prompting for each stack in the
+user file to include; it also never overwrites.
 
 Command-line options override the files. Lists such as mounts and
 environment variables add to the files' lists. When the same path is mounted

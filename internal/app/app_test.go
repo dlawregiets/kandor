@@ -12,9 +12,13 @@ import (
 )
 
 func call(t *testing.T, args ...string) (int, string, string) {
+	return callIn(t, "", args...)
+}
+
+func callIn(t *testing.T, stdin string, args ...string) (int, string, string) {
 	t.Helper()
 	var out, errb bytes.Buffer
-	code := run(args, &out, &errb)
+	code := run(args, strings.NewReader(stdin), &out, &errb)
 	return code, out.String(), errb.String()
 }
 

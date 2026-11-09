@@ -47,6 +47,9 @@ Options:
       --shell             Run a shell inside the sandbox instead of OpenCode
       --init-config       Create a commented config file at the standard path
                           (or $KANDOR_CONFIG) and exit; never overwrites
+      --init-project      Create .kandor.toml in the project directory and
+                          exit; prompts for user-config sections to include;
+                          never overwrites
       --migrate-config    Convert the old line-based config file to
                           config.toml and exit; never overwrites
       --dry-run           Print the bwrap command and exit (environment
@@ -72,6 +75,7 @@ Examples:
   kandor --no-net --shell
   kandor --ro ~/.config/gcloud --rw ~/go -- run "build it"
   kandor --init-config
+  kandor --init-project
   kandor --dry-run
 
 Configuration files:

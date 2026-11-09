@@ -28,7 +28,7 @@ var version = "dev"
 
 // Main runs kandor and returns its exit status.
 func Main(args []string) int {
-	return run(args, os.Stdout, os.Stderr)
+	return run(args, os.Stdin, os.Stdout, os.Stderr)
 }
 
 type output struct{ stdout, stderr io.Writer }
@@ -40,7 +40,7 @@ func (o output) fail(err error) int {
 	return 1
 }
 
-func run(args []string, stdout, stderr io.Writer) int {
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	o := output{stdout, stderr}
 	runner.MarkInheritedFDsCloseOnExec()
 	ag := agent.OpenCode
@@ -98,6 +98,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 	proj, haveProj, err := config.LoadProject(projDir)
 	if err != nil {
 		return o.fail(err)
+	}
+	if req.InitProject {
+		dir, err := validProject(projDir, home)
+		if err != nil {
+			return o.fail(err)
+		}
+		if err := initProject(dir, file, stdin, stderr); err != nil {
+			return o.fail(err)
+		}
+		return 0
 	}
 	s, err := config.Merge(file, proj, req.Overrides, ag.Name(), home, cwd, os.Getenv)
 	if err != nil {

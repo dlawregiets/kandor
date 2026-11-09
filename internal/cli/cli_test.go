@@ -113,6 +113,9 @@ func TestParseFlags(t *testing.T) {
 	if !r.Shell || !r.DryRun || !r.Verbose || !r.InitConfig {
 		t.Errorf("actions not applied: %+v", r)
 	}
+	if r := parse(t, "--init-project"); !r.InitProject {
+		t.Error("--init-project not recognised")
+	}
 	if r := parse(t, "--print-command"); !r.DryRun {
 		t.Error("--print-command is not an alias of --dry-run")
 	}

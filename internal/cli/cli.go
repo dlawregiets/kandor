@@ -17,6 +17,7 @@ type Request struct {
 
 	Help, Version             bool
 	InitConfig, MigrateConfig bool
+	InitProject               bool
 	Shell, DryRun, Verbose    bool
 }
 
@@ -77,6 +78,7 @@ func options(r *Request) map[string]option {
 		"--no-new-session":  {"sandbox.new_session", "", session(config.SessionOff)},
 		"--shell":           {"", "", func(r *Request, _ string) { r.Shell = true }},
 		"--init-config":     {"", "", func(r *Request, _ string) { r.InitConfig = true }},
+		"--init-project":    {"", "", func(r *Request, _ string) { r.InitProject = true }},
 		"--migrate-config":  {"", "", func(r *Request, _ string) { r.MigrateConfig = true }},
 		"--dry-run":         dryRun,
 		"--print-command":   dryRun,
