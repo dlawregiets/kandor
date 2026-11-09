@@ -118,8 +118,9 @@ func appendUnique(dst, src []string) []string {
 // Materialize turns spec paths into binds.  storeRoot holds the profile's
 // private copies (persistent when isolated, temporary when shared); home is
 // the host home for ~ expansion.  Missing host paths are skipped with a
-// warning so a fresh machine does not fail the run.
-func Materialize(spec Spec, storeRoot, home string, warn func(string)) []Bind {
+// warning so a fresh machine does not fail the run.  With dryRun, the binds
+// are planned but nothing is copied or created.
+func Materialize(spec Spec, storeRoot, home string, dryRun bool, warn func(string)) []Bind {
 	var binds []Bind
 	bind := func(src, dest string, writable bool) {
 		binds = append(binds, Bind{Src: src, Dest: dest, Writable: writable})
@@ -167,7 +168,7 @@ func Materialize(spec Spec, storeRoot, home string, warn func(string)) []Bind {
 			continue
 		}
 		store := filepath.Join(storeRoot, storeRel(resolved, home))
-		if _, err := os.Lstat(store); err != nil {
+		if _, err := os.Lstat(store); err != nil && !dryRun {
 			if err := copyTree(resolved, store); err != nil {
 				warn(fmt.Sprintf("cannot copy %s into the profile: %v", resolved, err))
 				continue
@@ -184,9 +185,11 @@ func Materialize(spec Spec, storeRoot, home string, warn func(string)) []Bind {
 		// requiring it.
 		resolved := paths.ResolveMaybe(exp, home)
 		store := filepath.Join(storeRoot, storeRel(resolved, home))
-		if err := os.MkdirAll(store, 0o755); err != nil {
-			warn(fmt.Sprintf("cannot create the profile directory for %s: %v", resolved, err))
-			continue
+		if !dryRun {
+			if err := os.MkdirAll(store, 0o755); err != nil {
+				warn(fmt.Sprintf("cannot create the profile directory for %s: %v", resolved, err))
+				continue
+			}
 		}
 		bind(store, resolved, true)
 	}

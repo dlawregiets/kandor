@@ -258,3 +258,45 @@ func TestPrepareIsolatedIgnoresWritable(t *testing.T) {
 		t.Errorf("warnings = %q", f.warns)
 	}
 }
+
+func TestPrepareDryRunCreatesNothing(t *testing.T) {
+	f := newFixture(t, true)
+	f.layout.DryRun = true
+	st := f.prepare(t)
+	if _, err := os.Stat(f.layout.Config); err == nil {
+		t.Error("dry-run created the config directory")
+	}
+	if _, err := os.Stat(filepath.Join(f.layout.Config, "opencode", ".kandor-seeded")); err == nil {
+		t.Error("dry-run seeded the profile")
+	}
+	// The plan still carries the binds and masks a real run would use.
+	if len(st.Binds) == 0 || len(st.Masks) == 0 {
+		t.Errorf("dry-run returned no plan: %+v", st)
+	}
+}
+
+func TestPrepareSharedSkipsNodeModules(t *testing.T) {
+	f := newFixture(t, false)
+	hostOC := filepath.Join(f.layout.HostConfig, "opencode")
+	if err := os.MkdirAll(filepath.Join(hostOC, "node_modules", "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(hostOC, "node_modules", "pkg", "index.js"), []byte("big"), 0o644)
+	st := f.prepare(t)
+	cfg := filepath.Join(f.layout.Config, "opencode")
+	if _, err := os.Stat(filepath.Join(cfg, "node_modules")); err == nil {
+		t.Error("node_modules was copied into the shared config")
+	}
+	if data, _ := os.ReadFile(filepath.Join(cfg, "opencode.json")); string(data) != `{"v":1}` {
+		t.Errorf("small config files were not copied: %q", data)
+	}
+	found := false
+	for _, b := range st.Binds {
+		if b.Src == filepath.Join(hostOC, "node_modules") && b.Dest == filepath.Join(cfg, "node_modules") && !b.Writable {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no read-only bind for the host node_modules: %+v", st.Binds)
+	}
+}

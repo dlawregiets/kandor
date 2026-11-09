@@ -112,10 +112,16 @@ func (opencode) Command(bin string, args []string) ([]string, error) {
 // never the host's service.json) and writes a private service.json.  In
 // shared mode, a host config, state or cache directory mounted read-write is
 // used directly instead of a temporary copy, so OpenCode's writes reach it.
+//
+// In a dry run, Prepare only plans: it creates nothing, copies nothing and
+// writes no service files, but returns the same binds and masks.
 func (opencode) Prepare(l Layout, warn func(string)) (State, error) {
 	dirs := []string{l.Config, l.Data, l.State, l.Cache}
 	for i, d := range dirs {
 		dirs[i] = filepath.Join(d, "opencode")
+		if l.DryRun {
+			continue
+		}
 		if err := os.MkdirAll(dirs[i], 0o755); err != nil {
 			return State{}, fmt.Errorf("cannot create OpenCode's config/data/state/cache directories")
 		}
@@ -147,15 +153,21 @@ func (opencode) Prepare(l Layout, warn func(string)) (State, error) {
 
 	hostConfig := filepath.Join(l.HostConfig, "opencode")
 	switch {
+	case l.DryRun:
+		// Plan only: the real run seeds a profile or a temporary copy.
 	case l.Isolated && l.Seed:
 		marker := filepath.Join(configDir, ".kandor-seeded")
 		if _, err := os.Stat(marker); err != nil {
-			copyConfig(hostConfig, configDir, "sandbox profile", warn)
+			copyConfig(hostConfig, configDir, "sandbox profile", nil, warn)
 			os.WriteFile(marker, nil, 0o644)
 		}
 	case !l.Isolated:
 		if !direct[0] {
-			copyConfig(hostConfig, configDir, "shared sandbox profile", warn)
+			// node_modules is derived from package.json and can be hundreds
+			// of megabytes; copying it dominated every shared-mode run.
+			// Mount the host's read-only instead: the temporary copy is
+			// discarded at exit, so installs into it never persisted anyway.
+			copyConfig(hostConfig, configDir, "shared sandbox profile", map[string]bool{"node_modules": true}, warn)
 		}
 		var copies []string
 		for i, name := range []string{0: "config", 2: "state", 3: "cache"} {
@@ -170,7 +182,9 @@ func (opencode) Prepare(l Layout, warn func(string)) (State, error) {
 		warn(msg)
 	}
 
-	writeServiceFiles(configDir, stateDir, warn)
+	if !l.DryRun {
+		writeServiceFiles(configDir, stateDir, warn)
+	}
 	// The host's service files hold its service's password and URL.  With
 	// them, a sandbox sharing the network could drive the host service,
 	// which runs commands outside the sandbox.
@@ -182,6 +196,13 @@ func (opencode) Prepare(l Layout, warn func(string)) (State, error) {
 	for i, d := range dirs {
 		if !direct[i] {
 			st.Binds = append(st.Binds, Bind{Src: d, Dest: d, Writable: true})
+		}
+	}
+	// The skipped node_modules comes back read-only, after the parent config
+	// bind so the child mount lands inside it.
+	if !l.Isolated && !direct[0] {
+		if hostModules := filepath.Join(hostConfig, "node_modules"); isDir(hostModules) {
+			st.Binds = append(st.Binds, Bind{Src: hostModules, Dest: filepath.Join(configDir, "node_modules")})
 		}
 	}
 	// Reuse the host's cached ripgrep binary without exposing the host cache
@@ -221,13 +242,13 @@ func freePort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-func copyConfig(src, dst, what string, warn func(string)) {
+func copyConfig(src, dst, what string, skip map[string]bool, warn func(string)) {
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		return
 	}
 	for _, e := range entries {
-		if e.Name() == "service.json" || e.Name()[0] == '.' {
+		if e.Name() == "service.json" || e.Name()[0] == '.' || skip[e.Name()] {
 			continue
 		}
 		from := filepath.Join(src, e.Name())

@@ -24,6 +24,8 @@ type Input struct {
 	XDGConfig string
 	Getenv    func(string) string
 	Warn      func(string)
+	// DryRun plans without creating files (mask placeholders, git hooks).
+	DryRun bool
 }
 
 // Result carries what later steps need from the mount planner.
@@ -103,7 +105,7 @@ func BuildMounts(p *Plan, in Input) (Result, error) {
 
 	r.Git = DiscoverGit(project, h, p, in.Warn)
 	if s.ProtectGit && r.Git.Trusted {
-		r.Git.Protect(p, project, in.Warn)
+		r.Git.Protect(p, project, in.Warn, in.DryRun)
 	}
 	if s.ProtectGit {
 		if _, err := os.Lstat(filepath.Join(project, ".git")); err != nil {
@@ -226,7 +228,7 @@ func BuildMounts(p *Plan, in Input) (Result, error) {
 
 	// Last, so no mount above can uncover them.
 	for _, m := range in.AgentMasks {
-		if err := mask(p, m); err != nil {
+		if err := mask(p, m, in.DryRun); err != nil {
 			return Result{}, err
 		}
 	}
@@ -235,8 +237,8 @@ func BuildMounts(p *Plan, in Input) (Result, error) {
 
 // mask covers m.Dest with m.Src wherever the planned mounts make it visible:
 // at its own path and at its resolved path, which is where extra mounts put
-// a symlinked directory.
-func mask(p *Plan, m agent.Mask) error {
+// a symlinked directory.  A dry run skips the placeholder write.
+func mask(p *Plan, m agent.Mask, dryRun bool) error {
 	dests := []string{m.Dest}
 	if dir, err := paths.Resolve(filepath.Dir(m.Dest)); err == nil {
 		if resolved := filepath.Join(dir, filepath.Base(m.Dest)); resolved != m.Dest {
@@ -249,7 +251,7 @@ func mask(p *Plan, m agent.Mask) error {
 			continue
 		}
 		if _, err := os.Lstat(dest); err != nil {
-			if !writable {
+			if !writable || dryRun {
 				continue
 			}
 			f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)

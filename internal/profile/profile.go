@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -28,10 +29,13 @@ type XDG struct {
 // non-default agent, and persists.  Shared mode uses a temporary directory
 // in tmpdir for config, state and cache, and the host's data directory for
 // the session database; the temporary directory is removed by cleanup.
-func Setup(s config.Settings, host XDG, kandorHome, tmpdir string, uid int, scope string) (agent.Layout, func(), error) {
+//
+// With dryRun, nothing is created or removed: the paths are computed so a
+// plan can be printed, but the profile and the host are left untouched.
+func Setup(s config.Settings, host XDG, kandorHome, tmpdir string, uid int, scope string, dryRun bool) (agent.Layout, func(), error) {
 	l := agent.Layout{
 		HostConfig: host.Config, HostData: host.Data, HostState: host.State, HostCache: host.Cache,
-		Isolated: s.Isolated, Seed: s.Seed,
+		Isolated: s.Isolated, Seed: s.Seed, DryRun: dryRun,
 	}
 	if s.Isolated {
 		if kandorHome == "" {
@@ -44,6 +48,9 @@ func Setup(s config.Settings, host XDG, kandorHome, tmpdir string, uid int, scop
 		l.ProfileRoot = filepath.Join(root, s.Profile)
 		l.Config, l.Data = filepath.Join(l.ProfileRoot, "config"), filepath.Join(l.ProfileRoot, "data")
 		l.State, l.Cache = filepath.Join(l.ProfileRoot, "state"), filepath.Join(l.ProfileRoot, "cache")
+		if dryRun {
+			return l, func() {}, nil
+		}
 		for _, d := range []string{l.Config, l.Data, l.State, l.Cache} {
 			if err := os.MkdirAll(d, 0o755); err != nil {
 				return agent.Layout{}, nil, fmt.Errorf("cannot create the isolated profile at %s", l.ProfileRoot)
@@ -54,12 +61,25 @@ func Setup(s config.Settings, host XDG, kandorHome, tmpdir string, uid int, scop
 	}
 
 	prefix := fmt.Sprintf("kandor-shared-%d.", uid)
-	removeStale(tmpdir, prefix)
+	var waitStale func()
+	if !dryRun {
+		waitStale = removeStaleAsync(tmpdir, prefix)
+	}
 	shared, err := os.MkdirTemp(tmpdir, prefix)
 	if err != nil {
 		return agent.Layout{}, nil, fmt.Errorf("cannot create a temporary shared profile")
 	}
-	cleanup := func() { os.RemoveAll(shared) }
+	cleanup := func() {
+		os.RemoveAll(shared)
+		if waitStale != nil {
+			waitStale()
+		}
+	}
+	if dryRun {
+		l.Config, l.State, l.Cache = filepath.Join(shared, "config"), filepath.Join(shared, "state"), filepath.Join(shared, "cache")
+		l.Data = host.Data
+		return l, cleanup, nil
+	}
 	if err := os.WriteFile(filepath.Join(shared, "pid"), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
 		cleanup()
 		return agent.Layout{}, nil, fmt.Errorf("cannot create a temporary shared profile")
@@ -76,27 +96,41 @@ func Setup(s config.Settings, host XDG, kandorHome, tmpdir string, uid int, scop
 	return l, cleanup, nil
 }
 
-// removeStale removes shared directories left by runs that were killed
+// removeStaleAsync removes shared directories left by runs that were killed
 // before they could clean up, keeping any whose owning process is alive.
-func removeStale(tmpdir, prefix string) {
+// The removals run in the background and the returned wait function blocks
+// until they finish, so startup is not delayed by deleting large leftovers.
+func removeStaleAsync(tmpdir, prefix string) func() {
+	var stale []string
 	entries, err := os.ReadDir(tmpdir)
-	if err != nil {
-		return
+	if err == nil {
+		for _, e := range entries {
+			if !e.IsDir() || !strings.HasPrefix(e.Name(), prefix) {
+				continue
+			}
+			dir := filepath.Join(tmpdir, e.Name())
+			info, err := e.Info()
+			if err != nil || time.Since(info.ModTime()) < time.Hour {
+				continue
+			}
+			data, _ := os.ReadFile(filepath.Join(dir, "pid"))
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 &&
+				syscall.Kill(pid, 0) == nil {
+				continue
+			}
+			stale = append(stale, dir)
+		}
 	}
-	for _, e := range entries {
-		if !e.IsDir() || !strings.HasPrefix(e.Name(), prefix) {
-			continue
-		}
-		dir := filepath.Join(tmpdir, e.Name())
-		info, err := e.Info()
-		if err != nil || time.Since(info.ModTime()) < time.Hour {
-			continue
-		}
-		data, _ := os.ReadFile(filepath.Join(dir, "pid"))
-		if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 &&
-			syscall.Kill(pid, 0) == nil {
-			continue
-		}
-		os.RemoveAll(dir)
+	if len(stale) == 0 {
+		return func() {}
 	}
+	var wg sync.WaitGroup
+	for _, dir := range stale {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			os.RemoveAll(dir)
+		}()
+	}
+	return wg.Wait
 }

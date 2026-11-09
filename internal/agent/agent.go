@@ -30,6 +30,8 @@ type Layout struct {
 	Config, Data, State, Cache                 string
 	HostConfig, HostData, HostState, HostCache string
 	Isolated, Seed                             bool
+	// DryRun plans the run without creating, copying or writing anything.
+	DryRun bool
 	// ProfileRoot is the isolated profile's directory ("" in shared mode).
 	ProfileRoot string
 	// Writable reports whether a host path is explicitly mounted read-write

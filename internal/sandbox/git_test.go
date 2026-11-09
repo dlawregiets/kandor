@@ -33,7 +33,7 @@ func (e *env) discover(t *testing.T, protect bool) ([]string, GitState) {
 	p := NewPlan(e.in.Features)
 	g := DiscoverGit(e.project, e.in.Host, p, e.in.Warn)
 	if protect && g.Trusted {
-		g.Protect(p, e.project, e.in.Warn)
+		g.Protect(p, e.project, e.in.Warn, false)
 	}
 	return p.Args(), g
 }
@@ -253,5 +253,23 @@ func TestAuditNewRepoWarns(t *testing.T) {
 	Audit(GitState{AuditNewRepo: true}, e.project, e.in.Warn)
 	if !e.warned("the sandbox created a git repository") {
 		t.Errorf("warnings = %q", e.warns)
+	}
+}
+
+func TestGitProtectDryRunCreatesNoHooks(t *testing.T) {
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	project := filepath.Join(dir, "proj")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	common := filepath.Join(dir, "repo.git")
+	if err := os.MkdirAll(common, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g := GitState{Common: common, Dir: common, Trusted: true}
+	p := NewPlan(Features{})
+	g.Protect(p, project, func(string) {}, true)
+	if _, err := os.Stat(filepath.Join(common, "hooks")); err == nil {
+		t.Error("dry-run created the hooks directory")
 	}
 }

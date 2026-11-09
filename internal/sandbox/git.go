@@ -35,18 +35,8 @@ func DiscoverGit(project string, host paths.Host, p *Plan, warn func(string)) Gi
 	if _, err := exec.LookPath("git"); err != nil {
 		return g
 	}
-	if _, err := gitProbe(project, "rev-parse", "--is-inside-work-tree"); err != nil {
-		return g
-	}
-	common, err := gitProbe(project, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil || common == "" {
-		// Older Git versions do not support --path-format.
-		common, _ = gitProbe(project, "rev-parse", "--git-common-dir")
-		if common != "" && !filepath.IsAbs(common) {
-			common = filepath.Join(project, common)
-		}
-	}
-	if common == "" {
+	common, dir, ok := gitDirs(project)
+	if !ok || common == "" {
 		return g
 	}
 	resolved, err := paths.Resolve(common)
@@ -66,12 +56,41 @@ func DiscoverGit(project string, host paths.Host, p *Plan, warn func(string)) Gi
 		return g
 	}
 	g.Dir = g.Common
-	if dir, err := gitProbe(project, "rev-parse", "--absolute-git-dir"); err == nil && dir != "" {
+	if dir != "" {
 		if resolved, err := paths.Resolve(dir); err == nil {
 			g.Dir = resolved
 		}
 	}
 	return g
+}
+
+// gitDirs reports the repository's common and per-worktree git directories in
+// one git invocation.  Older Git versions lack --path-format, so they fall
+// back to the individual probes.
+func gitDirs(project string) (common, dir string, ok bool) {
+	// Output order follows the arguments: inside-work-tree, common dir,
+	// absolute git dir.
+	out, err := gitProbe(project, "rev-parse", "--is-inside-work-tree",
+		"--path-format=absolute", "--git-common-dir", "--absolute-git-dir")
+	if err == nil {
+		lines := strings.Split(out, "\n")
+		if len(lines) >= 3 {
+			return lines[1], lines[2], true
+		}
+	} else if !strings.Contains(err.Error(), "unknown option") {
+		// Not a repository (or git refused); no point in more probes.
+		return "", "", false
+	}
+	// Older Git versions do not support --path-format.
+	common, err = gitProbe(project, "rev-parse", "--git-common-dir")
+	if err != nil || common == "" {
+		return "", "", false
+	}
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(project, common)
+	}
+	dir, _ = gitProbe(project, "rev-parse", "--absolute-git-dir")
+	return common, dir, true
 }
 
 func gitProbe(project string, args ...string) (string, error) {
@@ -81,8 +100,13 @@ func gitProbe(project string, args ...string) (string, error) {
 			cmd.Env = append(cmd.Env, kv)
 		}
 	}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
-	return strings.TrimSpace(string(out)), err
+	if err != nil {
+		return strings.TrimSpace(string(out)), fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func commonAllowed(project, common string, host paths.Host) bool {
@@ -177,7 +201,8 @@ func firstLine(path string) (string, bool) {
 // directories becomes a mount point or a read-only file, because a mount
 // point cannot be renamed: otherwise the sandbox could move .git aside, or
 // rewrite a .git file or commondir, and swap in a repository of its own.
-func (g *GitState) Protect(p *Plan, project string, warn func(string)) {
+// A dry run plans the same mounts but does not create the hooks directory.
+func (g *GitState) Protect(p *Plan, project string, warn func(string), dryRun bool) {
 	dotgit := filepath.Join(project, ".git")
 	if isFile(dotgit) {
 		p.RO(dotgit, dotgit)
@@ -191,7 +216,9 @@ func (g *GitState) Protect(p *Plan, project string, warn func(string)) {
 
 	hooks := filepath.Join(g.Common, "hooks")
 	if !isDir(hooks) {
-		if err := os.MkdirAll(hooks, 0o755); err != nil {
+		if dryRun {
+			warn("dry run: " + hooks + " does not exist yet; a real run creates it")
+		} else if err := os.MkdirAll(hooks, 0o755); err != nil {
 			warn(fmt.Sprintf("cannot create %s; git hooks are not protected", hooks))
 		}
 	}

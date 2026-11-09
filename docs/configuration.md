@@ -26,7 +26,7 @@ Run `kandor --help` for the full list. Common options:
 | `--allow-userns` | Allow nested user namespaces |
 | `--new-session` / `--no-new-session` | TIOCSTI protection vs. terminal resizing |
 | `--shell` | Run a shell inside the sandbox |
-| `--dry-run` | Print the bwrap command (redacts environment secrets) |
+| `--dry-run` | Print the planned bwrap command; creates nothing (redacts secrets) |
 
 For safety, `--ro` and `--rw` refuse `/`, `$HOME`, ancestors of `$HOME`,
 `/run/user/$UID`, and top-level host directories such as `/tmp`, `/etc` or

@@ -69,7 +69,7 @@ func testHome(t *testing.T) string {
 
 func TestMaterializeEmpty(t *testing.T) {
 	var warnings []string
-	if binds := Materialize(Spec{}, t.TempDir(), t.TempDir(), func(w string) { warnings = append(warnings, w) }); len(binds) != 0 {
+	if binds := Materialize(Spec{}, t.TempDir(), t.TempDir(), false, func(w string) { warnings = append(warnings, w) }); len(binds) != 0 {
 		t.Errorf("empty spec produced %d binds", len(binds))
 	}
 	if len(warnings) != 0 {
@@ -88,7 +88,7 @@ func TestMaterializeModes(t *testing.T) {
 		Copy:     []string{"~/.claude", "~/.claude.json"},
 		Private:  []string{"~/.pi", "/nowhere/private-dir"},
 	}
-	binds := Materialize(spec, store, home, warn)
+	binds := Materialize(spec, store, home, false, warn)
 	byDest := map[string]Bind{}
 	for _, b := range binds {
 		byDest[b.Dest] = b
@@ -185,5 +185,20 @@ func TestBuiltinExcludePrefixes(t *testing.T) {
 	}
 	if ag.ExcludeEnv("ANTHROPIC_API_KEY") {
 		t.Error("pi blocked a provider key")
+	}
+}
+
+func TestMaterializeDryRunCopiesNothing(t *testing.T) {
+	home := testHome(t)
+	store := filepath.Join(t.TempDir(), "store")
+	binds := Materialize(Spec{
+		Copy:    []string{"~/.claude"},
+		Private: []string{"~/.pi"},
+	}, store, home, true, func(string) {})
+	if len(binds) != 2 {
+		t.Errorf("binds = %+v", binds)
+	}
+	if _, err := os.Stat(store); err == nil {
+		t.Error("dry-run created the store")
 	}
 }

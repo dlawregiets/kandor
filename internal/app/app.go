@@ -160,8 +160,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return o.fail(errors.New("bwrap does not appear to work"))
 	}
 	features := sandbox.ParseFeatures(string(help))
-	if err := runner.Preflight(features); err != nil {
-		return o.fail(err)
+	if !req.DryRun {
+		if err := runner.Preflight(features); err != nil {
+			return o.fail(err)
+		}
 	}
 
 	var binary string
@@ -207,7 +209,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// are cleaned up (deferred calls run in reverse, so the guard stops last).
 	guard := runner.NewGuard()
 	defer guard.Stop()
-	layout, cleanup, err := profile.Setup(s, host, kandorHome, tmpdir, uid, profileScope(agentName))
+	layout, cleanup, err := profile.Setup(s, host, kandorHome, tmpdir, uid, profileScope(agentName), req.DryRun)
 	if err != nil {
 		return o.fail(err)
 	}
@@ -234,7 +236,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		// binds.
 		spec := agent.Resolve(ag.Name(), s.Agent)
 		state.Binds = append(state.Binds,
-			agent.Materialize(spec, filepath.Join(layout.Cache, ag.Name(), "paths"), home, o.warn)...)
+			agent.Materialize(spec, filepath.Join(layout.Cache, ag.Name(), "paths"), home, req.DryRun, o.warn)...)
 	}
 
 	newSession, explicit := sandbox.NewSessionDefault(s.NewSession, sandbox.TIOCSTIPath)
@@ -263,13 +265,23 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		XDGConfig:  host.Config,
 		Getenv:     os.Getenv,
 		Warn:       o.warn,
+		DryRun:     req.DryRun,
 	})
 	if err != nil {
 		return o.fail(err)
 	}
 
-	disableWorks := !s.AllowUserns && runner.DisableUsernsWorks(features)
-	if req.Verbose && !s.AllowUserns && !disableWorks {
+	disableWorks := false
+	if !s.AllowUserns {
+		if req.DryRun {
+			// Plan to disable nested user namespaces when bwrap supports
+			// it, without spending a probe subprocess on a preview.
+			disableWorks = features.DisableUserns
+		} else {
+			disableWorks = runner.DisableUsernsWorks(features)
+		}
+	}
+	if req.Verbose && !req.DryRun && !s.AllowUserns && !disableWorks {
 		o.warn("nested user namespaces cannot be disabled on this system")
 	}
 	sandbox.AddNamespaces(p, s, features, disableWorks, newSession, s.ProjectDir)

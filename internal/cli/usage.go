@@ -54,8 +54,9 @@ Options:
       --init-project      Create .kandor.toml in the project directory and
                           exit; prompts for user-config sections to include;
                           never overwrites
-      --dry-run           Print the bwrap command and exit (environment
-                          secrets are redacted; arguments are printed as-is)
+      --dry-run           Print the planned bwrap command and exit; creates
+                          nothing and does not probe user namespaces
+                          (environment secrets are redacted)
       --verbose           Print sandbox details
   -h, --help              Show this help
   -V, --version           Show the wrapper version
