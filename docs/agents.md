@@ -47,8 +47,20 @@ copy = ["~/.claude-work", "~/.claude-work.json"]
 
 Probed from `pi --help` (pi 1.4.0): global settings live in
 `~/.pi/agent/settings.json` and sessions in `~/.pi/agent/sessions/`. The
-built-in descriptor copies `~/.pi` into the profile and keeps host `PI_*`
-variables out (`PI_OFFLINE` and friends would otherwise point at host state).
+built-in descriptor:
+
+- copies `~/.pi` into the profile (settings, login, model store);
+- keeps `~/.pi/agent/sessions` shared read-write with the host, so a session
+  started in the sandbox can be resumed later (and host sessions are
+  visible), the same trade-off as OpenCode's shared data directory;
+- keeps downloaded helper binaries (`~/.pi/agent/bin`, e.g. `fd`) in a
+  kandor-owned persistent cache, so they are downloaded once and never
+  written back to the host;
+- points Node's compile cache at a kandor-owned persistent directory instead
+  of the sandbox's ephemeral `/tmp`, which otherwise makes every run pay a
+  cold-start compile (about 100 ms on `pi --version` alone);
+- keeps host `PI_*` variables out (`PI_OFFLINE` and friends would otherwise
+  point at host state).
 
 Provider keys (`ANTHROPIC_API_KEY` and friends) are forwarded automatically;
 `pi auth` on the host covers OAuth logins before the first copy. If you keep
@@ -86,6 +98,7 @@ share   = ["~/.aider.conf.yml"]      # read-write host mount (warned)
 copy    = ["~/.aider"]               # seeded into the profile once
 private = ["~/.aider/cache"]         # fresh profile dir, host stays hidden
 ro      = ["~/.config/git"]          # read-only host mount
+cache   = ["~/.aider/bin"]           # kandor-owned persistent dir (never the host's)
 
 [agents.aider.env]
 pass    = ["OPENAI_API_KEY"]         # forwarded from the host

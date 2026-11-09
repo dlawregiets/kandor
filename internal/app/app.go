@@ -236,7 +236,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		// binds.
 		spec := agent.Resolve(ag.Name(), s.Agent)
 		state.Binds = append(state.Binds,
-			agent.Materialize(spec, filepath.Join(layout.Cache, ag.Name(), "paths"), home, req.DryRun, o.warn)...)
+			agent.Materialize(spec, filepath.Join(layout.Cache, ag.Name(), "paths"),
+				filepath.Join(layout.HostCache, "kandor", ag.Name()), home, req.DryRun, layout.Isolated, o.warn)...)
 	}
 
 	newSession, explicit := sandbox.NewSessionDefault(s.NewSession, sandbox.TIOCSTIPath)

@@ -58,6 +58,7 @@ const template = `# kandor configuration file
 # copy = []     # seeded into the profile once, then the copy is writable
 # private = []  # fresh profile directories; matching host paths stay hidden
 # ro = []       # mounted read-only
+# cache = []    # kandor-owned persistent directories (never the host's)
 
 # [agents.opencode.mounts]  # like [mounts], but only when running OpenCode
 # read_only  = []
@@ -120,6 +121,7 @@ const template = `# kandor configuration file
 # copy = []
 # private = []
 # ro = []
+# cache = []
 
 # [sections.example.agents.opencode.mounts]
 # read_only  = []

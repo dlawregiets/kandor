@@ -112,6 +112,7 @@ var labels = map[string]classifier{
 	"agents.*.paths.copy":         exposure,
 	"agents.*.paths.private":      stringList,
 	"agents.*.paths.ro":           exposure,
+	"agents.*.paths.cache":        stringList,
 	"agents.*.mounts.read_only":   exposure,
 	"agents.*.mounts.read_write":  exposure,
 	"agents.*.env.pass":           exposure,
@@ -121,6 +122,7 @@ var labels = map[string]classifier{
 	"sections.*.paths.copy":       exposure,
 	"sections.*.paths.private":    stringList,
 	"sections.*.paths.ro":         exposure,
+	"sections.*.paths.cache":      stringList,
 	"include":                     stringList,
 	"default_agent":               text(Neutral),
 }

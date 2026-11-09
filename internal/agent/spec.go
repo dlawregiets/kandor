@@ -22,7 +22,14 @@ type Spec struct {
 	Copy        []string
 	Private     []string
 	ReadOnly    []string
-	EnvExclude  []string
+	// Cache names agent state kept in a kandor-owned persistent directory,
+	// never in the host's real location: derived downloads and caches that
+	// must survive runs but must not be written back to the host.
+	Cache      []string
+	EnvExclude []string
+	// NodeCompileCache keeps Node's compile cache in a persistent
+	// kandor-owned directory instead of the ephemeral $TMPDIR.
+	NodeCompileCache bool
 }
 
 // builtinSpecs are the agents kandor knows without configuration.
@@ -48,16 +55,20 @@ var builtinSpecs = []Spec{
 		EnvExclude: []string{"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"},
 	},
 	{
-		// Probed against pi 1.4.0 (pi --help).  Global settings and
-		// sessions live under ~/.pi; copy the tree so the sandbox never
-		// touches the host's.
+		// Probed against pi 1.4.0 (pi --help).  Settings and login live
+		// under ~/.pi; sessions and downloaded helper binaries (fd) are
+		// shared with the host so they survive between runs and are not
+		// downloaded again each time.
 		Name: "pi",
 		Subcommands: []string{
 			"install", "remove", "uninstall", "update", "list",
 			"config", "auth", "mcp",
 		},
-		Copy:       []string{"~/.pi"},
-		EnvExclude: []string{"PI_"},
+		Copy:             []string{"~/.pi"},
+		Share:            []string{"~/.pi/agent/sessions"},
+		Cache:            []string{"~/.pi/agent/bin"},
+		EnvExclude:       []string{"PI_"},
+		NodeCompileCache: true,
 	},
 	{
 		// Probed against Copilot CLI 1.0.101 (copilot --help).  The user
@@ -101,6 +112,7 @@ func Resolve(name string, cfg config.AgentSection) Spec {
 	s.Share = append(s.Share, cfg.Paths.Share...)
 	s.Copy = append(s.Copy, cfg.Paths.Copy...)
 	s.Private = append(s.Private, cfg.Paths.Private...)
+	s.Cache = append(s.Cache, cfg.Paths.Cache...)
 	s.ReadOnly = append(s.ReadOnly, cfg.Paths.RO...)
 	s.EnvExclude = appendUnique(s.EnvExclude, cfg.Env.Exclude)
 	return s
@@ -118,9 +130,12 @@ func appendUnique(dst, src []string) []string {
 // Materialize turns spec paths into binds.  storeRoot holds the profile's
 // private copies (persistent when isolated, temporary when shared); home is
 // the host home for ~ expansion.  Missing host paths are skipped with a
-// warning so a fresh machine does not fail the run.  With dryRun, the binds
-// are planned but nothing is copied or created.
-func Materialize(spec Spec, storeRoot, home string, dryRun bool, warn func(string)) []Bind {
+// warning so a fresh machine does not fail the run, except share paths,
+// which are created (share names state directories, not files).  With
+// dryRun, the binds are planned but nothing is copied or created.  With
+// isolated, share paths are seeded into the profile instead of exposed
+// read-write.
+func Materialize(spec Spec, storeRoot, cacheRoot, home string, dryRun, isolated bool, warn func(string)) []Bind {
 	var binds []Bind
 	bind := func(src, dest string, writable bool) {
 		binds = append(binds, Bind{Src: src, Dest: dest, Writable: writable})
@@ -151,11 +166,54 @@ func Materialize(spec Spec, storeRoot, home string, dryRun bool, warn func(strin
 		}
 		return resolved, true
 	}
-	for _, raw := range spec.Share {
-		if resolved, ok := existing(raw); ok {
-			warn(fmt.Sprintf("%s is mounted read-write into the sandbox", resolved))
-			bind(resolved, resolved, true)
+	// Paths materialized separately must not be copied into a parent copy
+	// first: sessions can be large, and tool downloads are recreated on
+	// demand, so copying them would only be discarded by the child mount.
+	overridden := map[string]bool{}
+	for _, list := range [][]string{spec.Share, spec.Cache, spec.Private, spec.ReadOnly} {
+		for _, raw := range list {
+			if exp, ok := absolute(raw); ok {
+				overridden[paths.ResolveMaybe(exp, home)] = true
+			}
 		}
+	}
+	copyInto := func(resolved string) {
+		store := filepath.Join(storeRoot, storeRel(resolved, home))
+		if _, err := os.Lstat(store); err != nil && !dryRun {
+			if err := copyTreeSkip(resolved, store, overridden); err != nil {
+				warn(fmt.Sprintf("cannot copy %s into the profile: %v", resolved, err))
+				return
+			}
+		}
+		bind(store, resolved, true)
+	}
+	for _, raw := range spec.Share {
+		exp, ok := absolute(raw)
+		if !ok {
+			continue
+		}
+		// Share names a state directory.  Create it when the agent has not
+		// yet (pi downloads helper binaries and writes sessions there), so
+		// the mount is not silently skipped on the first run.
+		if _, err := os.Lstat(exp); err != nil {
+			if dryRun {
+				warn(fmt.Sprintf("dry run: %s does not exist yet; a real run creates it", exp))
+			} else if err := os.MkdirAll(exp, 0o700); err != nil {
+				warn(fmt.Sprintf("cannot create %s: %v", exp, err))
+				continue
+			}
+		}
+		resolved, err := paths.Resolve(exp)
+		if err != nil {
+			// A dry run may not create the directory it plans to bind.
+			resolved = paths.ResolveMaybe(exp, home)
+		}
+		if isolated {
+			copyInto(resolved)
+			continue
+		}
+		warn(fmt.Sprintf("%s is mounted read-write into the sandbox", resolved))
+		bind(resolved, resolved, true)
 	}
 	for _, raw := range spec.ReadOnly {
 		if resolved, ok := existing(raw); ok {
@@ -163,18 +221,9 @@ func Materialize(spec Spec, storeRoot, home string, dryRun bool, warn func(strin
 		}
 	}
 	for _, raw := range spec.Copy {
-		resolved, ok := existing(raw)
-		if !ok {
-			continue
+		if resolved, ok := existing(raw); ok {
+			copyInto(resolved)
 		}
-		store := filepath.Join(storeRoot, storeRel(resolved, home))
-		if _, err := os.Lstat(store); err != nil && !dryRun {
-			if err := copyTree(resolved, store); err != nil {
-				warn(fmt.Sprintf("cannot copy %s into the profile: %v", resolved, err))
-				continue
-			}
-		}
-		bind(store, resolved, true)
 	}
 	for _, raw := range spec.Private {
 		exp, ok := absolute(raw)
@@ -193,7 +242,33 @@ func Materialize(spec Spec, storeRoot, home string, dryRun bool, warn func(strin
 		}
 		bind(store, resolved, true)
 	}
+	for _, raw := range spec.Cache {
+		exp, ok := absolute(raw)
+		if !ok {
+			continue
+		}
+		resolved := paths.ResolveMaybe(exp, home)
+		dir := filepath.Join(cacheRoot, storeRel(resolved, home))
+		if !dryRun {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				warn(fmt.Sprintf("cannot create the cache for %s: %v", resolved, err))
+				continue
+			}
+		}
+		bind(dir, resolved, true)
+	}
+	// Mount parents before children, whatever mode produced them: a later
+	// child bind must land inside an earlier parent bind, not be hidden by
+	// it (for example ~/.pi copied wholesale, with sessions shared beneath).
+	slices.SortStableFunc(binds, func(a, b Bind) int {
+		return pathDepth(a.Dest) - pathDepth(b.Dest)
+	})
 	return binds
+}
+
+// pathDepth counts the path components of p, so parents sort before children.
+func pathDepth(p string) int {
+	return strings.Count(filepath.Clean(p), string(filepath.Separator))
 }
 
 // storeRel maps a host path into the profile store: paths under home keep

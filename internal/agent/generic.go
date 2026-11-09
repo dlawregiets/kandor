@@ -1,6 +1,9 @@
 package agent
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -29,9 +32,25 @@ func (g generic) ExcludeEnv(name string) bool {
 	return false
 }
 
-// Prepare binds nothing itself: host state arrives through Materialize,
-// which app applies from the merged spec after Prepare.
-func (g generic) Prepare(Layout, func(string)) (State, error) { return State{}, nil }
+// Prepare provides the persistent caches a generic agent asks for.  Host
+// state itself arrives through Materialize, which app applies from the
+// merged spec after Prepare.
+func (g generic) Prepare(l Layout, warn func(string)) (State, error) {
+	if !g.spec.NodeCompileCache || l.HostCache == "" {
+		return State{}, nil
+	}
+	dir := filepath.Join(l.HostCache, "kandor", g.spec.Name, "node-compile-cache")
+	if !l.DryRun {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			warn(fmt.Sprintf("cannot create Node's compile cache at %s: %v", dir, err))
+			return State{}, nil
+		}
+	}
+	return State{
+		Binds: []Bind{{Src: dir, Dest: dir, Writable: true}},
+		Env:   []EnvVar{{Name: "NODE_COMPILE_CACHE", Value: dir}},
+	}, nil
+}
 
 // Command passes arguments through unchanged.
 func (g generic) Command(bin string, args []string) ([]string, error) {

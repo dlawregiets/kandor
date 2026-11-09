@@ -38,7 +38,7 @@ func TestKeysCoverSchema(t *testing.T) {
 		"profile.name", "env.set", "mounts.read_only", "agents.*.mounts.read_write",
 		"agents.*.binary", "agents.*.env.set", "include", "sections.*.mounts.read_write",
 		"sections.*.agents.*.binary", "default_agent", "agents.*.paths.share",
-		"sections.*.paths.share", "agents.*.env.exclude",
+		"sections.*.paths.share", "agents.*.env.exclude", "agents.*.paths.cache",
 	} {
 		if !slices.Contains(keys, want) {
 			t.Errorf("Keys() is missing %q; got %v", want, keys)
@@ -77,6 +77,8 @@ func TestClassifyValues(t *testing.T) {
 		{"agents.*.paths.copy", []string{"x"}, Widens},
 		{"agents.*.paths.private", []string{"x"}, Neutral},
 		{"agents.*.paths.ro", []string{}, Neutral},
+		{"agents.*.paths.cache", []string{"x"}, Neutral},
+		{"sections.*.paths.cache", []string{"x"}, Neutral},
 		{"agents.*.env.exclude", []string{"X"}, Neutral},
 		{"sections.*.paths.share", []string{"x"}, Widens},
 		{"default_agent", "pi", Neutral},

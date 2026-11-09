@@ -102,6 +102,7 @@ func Merge(user, project *File, o Overrides, agent, home, cwd string, getenv fun
 		s.Agent.Paths.Copy = append(s.Agent.Paths.Copy, a.Paths.Copy...)
 		s.Agent.Paths.Private = append(s.Agent.Paths.Private, a.Paths.Private...)
 		s.Agent.Paths.RO = append(s.Agent.Paths.RO, a.Paths.RO...)
+		s.Agent.Paths.Cache = append(s.Agent.Paths.Cache, a.Paths.Cache...)
 		s.Agent.Env.Exclude = appendUnique(s.Agent.Env.Exclude, a.Env.Exclude)
 	}
 
@@ -155,7 +156,7 @@ func resolveLayers(user, project *File, agent string) ([]*File, error) {
 		}
 		applied[name] = true
 		layer := sec.layer()
-		if p := sec.Paths; len(p.Share)+len(p.Copy)+len(p.Private)+len(p.RO) > 0 {
+		if p := sec.Paths; len(p.Share)+len(p.Copy)+len(p.Private)+len(p.RO)+len(p.Cache) > 0 {
 			if layer.Agents == nil {
 				layer.Agents = map[string]AgentSection{}
 			}
@@ -164,6 +165,7 @@ func resolveLayers(user, project *File, agent string) ([]*File, error) {
 			a.Paths.Copy = append(a.Paths.Copy, p.Copy...)
 			a.Paths.Private = append(a.Paths.Private, p.Private...)
 			a.Paths.RO = append(a.Paths.RO, p.RO...)
+			a.Paths.Cache = append(a.Paths.Cache, p.Cache...)
 			layer.Agents[agent] = a
 		}
 		layers = append(layers, layer)
@@ -265,7 +267,7 @@ func checkAgentPaths(layers []*File, home string) error {
 				list []string
 			}{
 				{"share", p.Share}, {"copy", p.Copy},
-				{"private", p.Private}, {"ro", p.RO},
+				{"private", p.Private}, {"ro", p.RO}, {"cache", p.Cache},
 			}
 			seen := map[string]string{}
 			for _, m := range modes {

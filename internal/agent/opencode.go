@@ -261,6 +261,13 @@ func copyConfig(src, dst, what string, skip map[string]bool, warn func(string)) 
 // copyTree copies like "cp -aL": symlinks are followed and modes and
 // modification times are kept.
 func copyTree(src, dst string) error {
+	return copyTreeSkip(src, dst, nil)
+}
+
+// copyTreeSkip is copyTree but omits paths in skip (absolute source paths,
+// which are mounted separately and would otherwise be copied and discarded).
+// The root itself is always copied; skip applies below it.
+func copyTreeSkip(src, dst string, skip map[string]bool) error {
 	st, err := os.Stat(src)
 	if err != nil {
 		return err
@@ -276,7 +283,11 @@ func copyTree(src, dst string) error {
 		}
 		var firstErr error
 		for _, e := range entries {
-			if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil && firstErr == nil {
+			child := filepath.Join(src, e.Name())
+			if skip[child] {
+				continue
+			}
+			if err := copyTreeSkip(child, filepath.Join(dst, e.Name()), skip); err != nil && firstErr == nil {
 				firstErr = err
 			}
 		}

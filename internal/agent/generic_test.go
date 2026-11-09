@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -78,5 +80,29 @@ func TestIsSubcommandFor(t *testing.T) {
 	isSub := IsSubcommandFor("pi", config.AgentSection{Subcommands: []string{"mcp"}})
 	if !isSub("mcp") || isSub("run") {
 		t.Error("IsSubcommandFor wrong")
+	}
+}
+
+func TestGenericPrepareNodeCompileCache(t *testing.T) {
+	layout := Layout{HostCache: t.TempDir()}
+	ag := For("pi", config.AgentSection{})
+	state, err := ag.Prepare(layout, func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(layout.HostCache, "kandor", "pi", "node-compile-cache")
+	if len(state.Binds) != 1 || state.Binds[0].Src != dir || !state.Binds[0].Writable {
+		t.Errorf("binds = %+v", state.Binds)
+	}
+	if len(state.Env) != 1 || state.Env[0].Name != "NODE_COMPILE_CACHE" || state.Env[0].Value != dir {
+		t.Errorf("env = %+v", state.Env)
+	}
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		t.Errorf("cache directory was not created: %v", err)
+	}
+	// An agent without the opt-in gets nothing.
+	state, _ = For("copilot", config.AgentSection{}).Prepare(layout, func(string) {})
+	if len(state.Binds) != 0 || len(state.Env) != 0 {
+		t.Errorf("copilot got a compile cache: %+v", state)
 	}
 }

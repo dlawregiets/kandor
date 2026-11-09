@@ -109,12 +109,14 @@ type AgentSection struct {
 	Env    AgentEnv   `toml:"env,omitempty"`
 }
 
-// AgentPaths holds the four host-state modes for one agent.
+// AgentPaths holds the host-state modes for one agent.
 type AgentPaths struct {
 	Share   []string `toml:"share,omitempty"`
 	Copy    []string `toml:"copy,omitempty"`
 	Private []string `toml:"private,omitempty"`
 	RO      []string `toml:"ro,omitempty"`
+	// Cache is kandor-owned persistent state, never the host's path.
+	Cache []string `toml:"cache,omitempty"`
 }
 
 // AgentEnv is EnvSection plus the host variables one agent must never see.
