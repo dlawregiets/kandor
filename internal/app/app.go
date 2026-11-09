@@ -61,17 +61,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	loc := config.Locate(os.Getenv)
-	if pre.MigrateConfig {
-		dest, err := config.Migrate(loc)
-		if err != nil {
-			return o.fail(err)
-		}
-		o.log("wrote " + dest)
-		if loc.Explicit {
-			o.log("update KANDOR_CONFIG to point at it")
-		}
-		return 0
-	}
 	if pre.InitConfig {
 		if err := config.WriteTemplate(loc.TOML); err != nil {
 			return o.fail(err)
@@ -79,13 +68,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		o.log("created " + loc.TOML)
 		return 0
 	}
-	if err := config.CheckLegacy(loc); err != nil {
-		return o.fail(err)
-	}
 	file, err := config.Load(loc.TOML)
 	if err != nil {
 		return o.fail(err)
 	}
+
+	// --agent wins, then KANDOR_AGENT, then the user configuration.
 
 	// --agent wins, then KANDOR_AGENT, then the user configuration.
 	agentName := pre.Agent

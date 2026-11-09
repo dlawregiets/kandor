@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -192,43 +191,15 @@ func env(m map[string]string) func(string) string {
 
 func TestLocate(t *testing.T) {
 	loc := Locate(env(map[string]string{"HOME": "/h", "KANDOR_CONFIG": "/etc/k.toml"}))
-	if loc.TOML != "/etc/k.toml" || !loc.Explicit || loc.Legacy != "/h/.config/kandor/config" {
+	if loc.TOML != "/etc/k.toml" || !loc.Explicit {
 		t.Errorf("explicit Locate = %+v", loc)
 	}
 	loc = Locate(env(map[string]string{"HOME": "/h", "XDG_CONFIG_HOME": "/x"}))
-	if loc.TOML != "/x/kandor/config.toml" || loc.Explicit || loc.Legacy != "/x/kandor/config" {
+	if loc.TOML != "/x/kandor/config.toml" || loc.Explicit {
 		t.Errorf("XDG Locate = %+v", loc)
 	}
 	loc = Locate(env(map[string]string{"HOME": "/h"}))
 	if loc.TOML != "/h/.config/kandor/config.toml" {
 		t.Errorf("default Locate = %+v", loc)
-	}
-}
-
-func TestCheckLegacy(t *testing.T) {
-	dir := t.TempDir()
-	loc := Locations{TOML: filepath.Join(dir, "config.toml"), Legacy: filepath.Join(dir, "config")}
-	if err := CheckLegacy(loc); err != nil {
-		t.Errorf("neither file: %v", err)
-	}
-	if err := os.WriteFile(loc.Legacy, []byte("no-net\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var le *LegacyError
-	if err := CheckLegacy(loc); !errors.As(err, &le) || le.Path != loc.Legacy {
-		t.Errorf("legacy only: %v, want *LegacyError for %s", err, loc.Legacy)
-	} else if !strings.Contains(err.Error(), "kandor --migrate-config") {
-		t.Errorf("message = %q", err)
-	}
-	explicit := loc
-	explicit.TOML, explicit.Explicit = filepath.Join(dir, "chosen.toml"), true
-	if err := CheckLegacy(explicit); err != nil {
-		t.Errorf("KANDOR_CONFIG set: %v, want nil (the default old file is irrelevant)", err)
-	}
-	if err := os.WriteFile(loc.TOML, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := CheckLegacy(loc); err != nil {
-		t.Errorf("both files: %v, want nil", err)
 	}
 }

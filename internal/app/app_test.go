@@ -65,14 +65,6 @@ func TestMainUnknownConfigKey(t *testing.T) {
 	}
 }
 
-func TestMainLegacyConfig(t *testing.T) {
-	configFile(t, "no-net\n")
-	code, _, errs := call(t, "--dry-run")
-	if code != 1 || !strings.Contains(errs, "--migrate-config") {
-		t.Errorf("code = %d, stderr = %q", code, errs)
-	}
-}
-
 func TestMainInitConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "k", "config.toml")
 	t.Setenv("KANDOR_CONFIG", path)
@@ -82,17 +74,6 @@ func TestMainInitConfig(t *testing.T) {
 	}
 	if code, _, _ := call(t, "--init-config"); code != 1 {
 		t.Error("--init-config overwrote an existing file")
-	}
-}
-
-func TestMainMigrateConfig(t *testing.T) {
-	old := filepath.Join(t.TempDir(), "old-config")
-	os.WriteFile(old, []byte("no-net\n"), 0o600)
-	t.Setenv("KANDOR_CONFIG", old)
-	code, _, errs := call(t, "--migrate-config")
-	dest := filepath.Join(filepath.Dir(old), "config.toml")
-	if code != 0 || !strings.Contains(errs, "kandor: wrote "+dest) || !strings.Contains(errs, "KANDOR_CONFIG") {
-		t.Errorf("code = %d, stderr = %q", code, errs)
 	}
 }
 

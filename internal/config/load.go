@@ -15,11 +15,10 @@ import (
 // Locations are the configuration file paths for this environment.
 type Locations struct {
 	TOML     string // the TOML file to load
-	Legacy   string // the old line-based file at the standard location
 	Explicit bool   // TOML came from KANDOR_CONFIG
 }
 
-// Locate finds the configuration files: $KANDOR_CONFIG, else
+// Locate finds the configuration file: $KANDOR_CONFIG, else
 // $XDG_CONFIG_HOME/kandor/config.toml, else ~/.config/kandor/config.toml.
 func Locate(getenv func(string) string) Locations {
 	dir := getenv("XDG_CONFIG_HOME")
@@ -27,29 +26,12 @@ func Locate(getenv func(string) string) Locations {
 		dir = filepath.Join(getenv("HOME"), ".config")
 	}
 	dir = filepath.Join(dir, "kandor")
-	loc := Locations{TOML: filepath.Join(dir, "config.toml"), Legacy: filepath.Join(dir, "config")}
+	loc := Locations{TOML: filepath.Join(dir, "config.toml")}
 	if p := getenv("KANDOR_CONFIG"); p != "" {
 		loc.TOML = p
 		loc.Explicit = true
 	}
 	return loc
-}
-
-// LegacyError reports a configuration file in the old line-based format.
-type LegacyError struct{ Path string }
-
-func (e *LegacyError) Error() string {
-	return fmt.Sprintf("%s uses the old configuration format; run 'kandor --migrate-config'", e.Path)
-}
-
-// CheckLegacy reports an old-format file at the standard location when the
-// TOML file does not exist yet, so its settings are not silently ignored.
-// With KANDOR_CONFIG set, only that file matters.
-func CheckLegacy(loc Locations) error {
-	if loc.Explicit || exists(loc.TOML) || !exists(loc.Legacy) {
-		return nil
-	}
-	return &LegacyError{Path: loc.Legacy}
 }
 
 func exists(p string) bool {
@@ -83,9 +65,6 @@ func Load(path string) (*File, error) {
 	var f File
 	md, err := toml.Decode(string(data), &f)
 	if err != nil {
-		if IsLegacy(data) {
-			return nil, &LegacyError{Path: path}
-		}
 		if pe, ok := errors.AsType[toml.ParseError](err); ok {
 			return nil, fmt.Errorf("%s: line %d: %s", path, pe.Position.Line, pe.Message)
 		}

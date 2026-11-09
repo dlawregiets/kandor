@@ -54,8 +54,6 @@ Options:
       --init-project      Create .kandor.toml in the project directory and
                           exit; prompts for user-config sections to include;
                           never overwrites
-      --migrate-config    Convert the old line-based config file to
-                          config.toml and exit; never overwrites
       --dry-run           Print the bwrap command and exit (environment
                           secrets are redacted; arguments are printed as-is)
       --verbose           Print sandbox details

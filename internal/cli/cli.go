@@ -15,10 +15,9 @@ type Request struct {
 	// AgentArgs are passed to the agent unchanged.
 	AgentArgs []string
 
-	Help, Version             bool
-	InitConfig, MigrateConfig bool
-	InitProject               bool
-	Shell, DryRun, Verbose    bool
+	Help, Version           bool
+	InitConfig, InitProject bool
+	Shell, DryRun, Verbose  bool
 	// Agent selects the coding agent; "" resolves from KANDOR_AGENT, the
 	// user configuration, then the "opencode" default.
 	Agent string
@@ -86,7 +85,6 @@ func options(r *Request) map[string]option {
 		"--init-config":     {"", "", func(r *Request, _ string) { r.InitConfig = true }},
 		"--init-project":    {"", "", func(r *Request, _ string) { r.InitProject = true }},
 		"--agent":           {"", "--agent requires a name", func(r *Request, v string) { r.Agent = v }},
-		"--migrate-config":  {"", "", func(r *Request, _ string) { r.MigrateConfig = true }},
 		"--dry-run":         dryRun,
 		"--print-command":   dryRun,
 		"--verbose":         {"", "", func(r *Request, _ string) { r.Verbose = true }},

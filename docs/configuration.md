@@ -8,7 +8,6 @@ Run `kandor --help` for the full list. Common options:
 | --- | --- |
 | `--init-config` | Create a commented config file and exit |
 | `--init-project` | Create `.kandor.toml` in the project, prompting for sections |
-| `--migrate-config` | Convert the old line-based config file to `config.toml` |
 | `-C, --dir DIR` | Project directory (default: `$PWD`) |
 | `--ro PATH` | Extra read-only mount (repeatable) |
 | `--rw PATH` | Extra read-write mount (repeatable) |
@@ -137,19 +136,4 @@ section, the command line. So `--ro PATH`
 makes a configured `read_write` path read-only for one run, and `--rw PATH`
 makes a `read_only` path writable. Listing the same path as both
 `read_only` and `read_write` in one layer is an error.
-
-#### Migrating from the old format
-
-Earlier versions used a line-based file at `~/.config/kandor/config`. If
-that file exists and `config.toml` does not, `kandor` stops and asks you to
-convert it:
-
-```sh
-kandor --migrate-config
-```
-
-This writes `config.toml` next to the old file (never overwriting) and leaves
-the old file in place, so you can delete it once you have checked the result.
-If `KANDOR_CONFIG` points at an old-format file, the new file is written in
-the same directory and you need to point `KANDOR_CONFIG` at it.
 

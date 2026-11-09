@@ -148,12 +148,6 @@ func TestParseMissingArgument(t *testing.T) {
 	}
 }
 
-func TestParseMigrateConfig(t *testing.T) {
-	if r := parse(t, "--migrate-config"); !r.MigrateConfig {
-		t.Error("--migrate-config not recognised")
-	}
-}
-
 func TestOptionKeysAreClassified(t *testing.T) {
 	keys := config.Keys()
 	for opt, key := range OptionKeys() {
@@ -170,7 +164,7 @@ func TestOptionKeysAreClassified(t *testing.T) {
 
 func TestUsage(t *testing.T) {
 	u := Usage()
-	for _, want := range []string{"--migrate-config", "config.toml", "--init-config", "--no-protect-git", "Run OpenCode inside a bubblewrap sandbox."} {
+	for _, want := range []string{"config.toml", "--init-config", "--init-project", "--no-protect-git", "Run OpenCode inside a bubblewrap sandbox."} {
 		if !strings.Contains(u, want) {
 			t.Errorf("Usage() is missing %q", want)
 		}
