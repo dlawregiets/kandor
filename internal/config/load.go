@@ -59,6 +59,17 @@ func exists(p string) bool {
 
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// agentName restricts [agents.<name>] sections to lowercase names; "exec"
+// is the generic-command mode and "default" would confuse default_agent.
+var agentName = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+
+func validAgentName(name string) bool {
+	if name == "exec" || name == "default" {
+		return false
+	}
+	return agentName.MatchString(name)
+}
+
 // Load reads the TOML file at path.  A missing file yields an empty File.
 // Unknown keys, wrong types and unknown agents are errors.
 func Load(path string) (*File, error) {
@@ -95,8 +106,11 @@ func Load(path string) (*File, error) {
 }
 
 func validate(f *File) error {
-	if err := validateEnv(f.Env); err != nil {
+	if err := validateEnvSet(f.Env.Set); err != nil {
 		return err
+	}
+	if f.DefaultAgent != "" && !validAgentName(f.DefaultAgent) {
+		return fmt.Errorf("invalid default_agent %q (use a lowercase agent name)", f.DefaultAgent)
 	}
 	names := make([]string, 0, len(f.Agents))
 	for name := range f.Agents {
@@ -104,19 +118,19 @@ func validate(f *File) error {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if name != "opencode" {
-			return fmt.Errorf("unknown agent %q", name)
+		if !validAgentName(name) {
+			return fmt.Errorf("invalid agent name %q (use lowercase letters, digits, '-' and '_'; not \"exec\" or \"default\")", name)
 		}
-		if err := validateEnv(f.Agents[name].Env); err != nil {
+		if err := validateEnvSet(f.Agents[name].Env.Set); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateEnv(e EnvSection) error {
-	names := make([]string, 0, len(e.Set))
-	for name := range e.Set {
+func validateEnvSet(set map[string]string) error {
+	names := make([]string, 0, len(set))
+	for name := range set {
 		names = append(names, name)
 	}
 	sort.Strings(names)

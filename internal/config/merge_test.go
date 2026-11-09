@@ -94,7 +94,7 @@ func TestMergeCommandLineConflict(t *testing.T) {
 func TestMergeEnvOrder(t *testing.T) {
 	f := &File{
 		Env:    EnvSection{Pass: []string{"P"}, Set: map[string]string{"B": "2", "A": "1"}},
-		Agents: map[string]AgentSection{"opencode": {Env: EnvSection{Pass: []string{"Q"}, Set: map[string]string{"Z": "9"}}}},
+		Agents: map[string]AgentSection{"opencode": {Env: AgentEnv{Pass: []string{"Q"}, Set: map[string]string{"Z": "9"}}}},
 	}
 	s := merge(t, f, Overrides{Env: []EnvSpec{{Name: "C", Value: "3", HasValue: true}}}, nil)
 	want := []EnvSpec{{"P", "", false}, {"A", "1", true}, {"B", "2", true}, {"Q", "", false}, {"Z", "9", true}, {"C", "3", true}}
@@ -207,5 +207,44 @@ func TestMergeSectionAgentLayer(t *testing.T) {
 	want := []string{"/h/top", "/h/go", "/h/proj", "/h/agent", "/h/go-agent"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Mounts = %v, want %v", got, want)
+	}
+}
+
+func TestMergeSectionPathsFoldIntoAgent(t *testing.T) {
+	user := &File{
+		Sections: map[string]Section{
+			"go": {Paths: AgentPaths{Share: []string{"~/go"}}},
+		},
+		Agents: map[string]AgentSection{
+			"opencode": {Paths: AgentPaths{RO: []string{"~/ro"}}},
+		},
+	}
+	proj := &File{Include: []string{"go"}}
+	if _, err := Merge(user, proj, Overrides{}, "opencode", "/h", "/cwd", env(nil)); err != nil {
+		t.Fatalf("section paths rejected: %v", err)
+	}
+	// A section listing one path under two modes is an error, like mounts.
+	user.Sections["go"] = Section{
+		Paths: AgentPaths{Share: []string{"~/x"}},
+		Agents: map[string]AgentSection{
+			"opencode": {Paths: AgentPaths{Copy: []string{"$HOME/x"}}},
+		},
+	}
+	_, err := Merge(user, proj, Overrides{}, "opencode", "/h", "/cwd", env(nil))
+	if err == nil || !strings.Contains(err.Error(), `agents.opencode: "/h/x" is listed in both share and copy`) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestMergeAgentPathErrors(t *testing.T) {
+	user := &File{Agents: map[string]AgentSection{"pi": {Paths: AgentPaths{Share: []string{""}}}}}
+	if _, err := Merge(user, nil, Overrides{}, "pi", "/h", "/cwd", env(nil)); err == nil ||
+		!strings.Contains(err.Error(), "agents.pi: empty path in share") {
+		t.Errorf("err = %v", err)
+	}
+	proj := &File{DefaultAgent: "pi"}
+	if _, err := Merge(&File{}, proj, Overrides{}, "pi", "/h", "/cwd", env(nil)); err == nil ||
+		!strings.Contains(err.Error(), "default_agent may only be set in the user configuration file") {
+		t.Errorf("err = %v", err)
 	}
 }

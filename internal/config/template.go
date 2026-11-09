@@ -17,6 +17,8 @@ const template = `# kandor configuration file
 
 # include = []  # named stacks from [sections.*] to always apply, e.g. ["go"]
 
+# default_agent = "opencode"  # the agent to run; --agent and KANDOR_AGENT win
+
 # [mounts]
 # read_only  = []  # host paths mounted read-only, e.g. ["~/.config/gcloud"]
 # read_write = []  # host paths mounted read-write, e.g. ["~/go"]
@@ -49,6 +51,13 @@ const template = `# kandor configuration file
 
 # [agents.opencode]
 # binary = ""  # path to opencode; empty searches PATH (KANDOR_BIN overrides it)
+# subcommands = []  # extra subcommands, for agents defined here
+
+# [agents.opencode.paths]  # host state for the agent, in four modes
+# share = []    # mounted read-write (warned)
+# copy = []     # seeded into the profile once, then the copy is writable
+# private = []  # fresh profile directories; matching host paths stay hidden
+# ro = []       # mounted read-only
 
 # [agents.opencode.mounts]  # like [mounts], but only when running OpenCode
 # read_only  = []
@@ -56,6 +65,7 @@ const template = `# kandor configuration file
 
 # [agents.opencode.env]  # like [env], but only when running OpenCode
 # pass = []
+# exclude = []  # host variables this agent must never see
 
 # [agents.opencode.env.set]
 
@@ -95,6 +105,19 @@ const template = `# kandor configuration file
 
 # [sections.example.agents.opencode]
 # binary = ""
+# subcommands = []
+
+# [sections.example.agents.opencode.paths]
+# share = []
+# copy = []
+# private = []
+# ro = []
+
+# [sections.example.paths]
+# share = []
+# copy = []
+# private = []
+# ro = []
 
 # [sections.example.agents.opencode.mounts]
 # read_only  = []
@@ -102,6 +125,7 @@ const template = `# kandor configuration file
 
 # [sections.example.agents.opencode.env]
 # pass = []
+# exclude = []
 
 # [sections.example.agents.opencode.env.set]
 `

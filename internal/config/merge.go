@@ -34,8 +34,14 @@ func Merge(user, project *File, o Overrides, agent, home, cwd string, getenv fun
 	if len(project.Sections) > 0 {
 		return Settings{}, fmt.Errorf("sections must be defined in the user configuration file, not the project one")
 	}
-	layers, err := resolveLayers(user, project)
+	if project.DefaultAgent != "" {
+		return Settings{}, fmt.Errorf("default_agent may only be set in the user configuration file, not the project one")
+	}
+	layers, err := resolveLayers(user, project, agent)
 	if err != nil {
+		return Settings{}, err
+	}
+	if err := checkAgentPaths(layers, home); err != nil {
 		return Settings{}, err
 	}
 
@@ -74,7 +80,7 @@ func Merge(user, project *File, o Overrides, agent, home, cwd string, getenv fun
 			return Settings{}, err
 		}
 		s.Mounts = append(s.Mounts, mounts...)
-		s.Env = append(s.Env, envSpecs(l.Env)...)
+		s.Env = append(s.Env, envSpecs(l.Env.Pass, l.Env.Set)...)
 	}
 
 	for _, l := range layers {
@@ -84,7 +90,7 @@ func Merge(user, project *File, o Overrides, agent, home, cwd string, getenv fun
 			return Settings{}, err
 		}
 		s.Mounts = append(s.Mounts, mounts...)
-		s.Env = append(s.Env, envSpecs(a.Env)...)
+		s.Env = append(s.Env, envSpecs(a.Env.Pass, a.Env.Set)...)
 		if a.Binary != nil {
 			s.AgentBinary = *a.Binary
 		}
@@ -124,8 +130,10 @@ func Merge(user, project *File, o Overrides, agent, home, cwd string, getenv fun
 
 // resolveLayers orders the file layers: the user file, its "default"
 // section, its included sections, the project file's included sections and
-// the project file itself.  Each named section applies at most once.
-func resolveLayers(user, project *File) ([]*File, error) {
+// the project file itself.  Each named section applies at most once.  A
+// section's own Paths apply to the agent being run, folded into its agent
+// entry for that layer.
+func resolveLayers(user, project *File, agent string) ([]*File, error) {
 	layers := []*File{user}
 	applied := map[string]bool{}
 	apply := func(name, where string) error {
@@ -137,7 +145,19 @@ func resolveLayers(user, project *File) ([]*File, error) {
 			return fmt.Errorf("unknown section %q in the %s include list", name, where)
 		}
 		applied[name] = true
-		layers = append(layers, sec.layer())
+		layer := sec.layer()
+		if p := sec.Paths; len(p.Share)+len(p.Copy)+len(p.Private)+len(p.RO) > 0 {
+			if layer.Agents == nil {
+				layer.Agents = map[string]AgentSection{}
+			}
+			a := layer.Agents[agent]
+			a.Paths.Share = append(a.Paths.Share, p.Share...)
+			a.Paths.Copy = append(a.Paths.Copy, p.Copy...)
+			a.Paths.Private = append(a.Paths.Private, p.Private...)
+			a.Paths.RO = append(a.Paths.RO, p.RO...)
+			layer.Agents[agent] = a
+		}
+		layers = append(layers, layer)
 		return nil
 	}
 	if _, ok := user.Sections["default"]; ok {
@@ -194,18 +214,54 @@ func expandLayer(layer []MountSpec, home string) ([]MountSpec, error) {
 	return out, nil
 }
 
-func envSpecs(e EnvSection) []EnvSpec {
-	out := make([]EnvSpec, 0, len(e.Pass)+len(e.Set))
-	for _, name := range e.Pass {
+func envSpecs(pass []string, set map[string]string) []EnvSpec {
+	out := make([]EnvSpec, 0, len(pass)+len(set))
+	for _, name := range pass {
 		out = append(out, EnvSpec{Name: name})
 	}
-	names := make([]string, 0, len(e.Set))
-	for name := range e.Set {
+	names := make([]string, 0, len(set))
+	for name := range set {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		out = append(out, EnvSpec{Name: name, Value: e.Set[name], HasValue: true})
+		out = append(out, EnvSpec{Name: name, Value: set[name], HasValue: true})
 	}
 	return out
+}
+
+// checkAgentPaths rejects empty paths and paths listed under two state modes
+// of the same agent, after home expansion.
+func checkAgentPaths(layers []*File, home string) error {
+	for _, l := range layers {
+		names := make([]string, 0, len(l.Agents))
+		for name := range l.Agents {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			p := l.Agents[name].Paths
+			modes := []struct {
+				mode string
+				list []string
+			}{
+				{"share", p.Share}, {"copy", p.Copy},
+				{"private", p.Private}, {"ro", p.RO},
+			}
+			seen := map[string]string{}
+			for _, m := range modes {
+				for _, raw := range m.list {
+					if raw == "" {
+						return fmt.Errorf("agents.%s: empty path in %s", name, m.mode)
+					}
+					exp := paths.Expand(raw, home)
+					if prev, ok := seen[exp]; ok {
+						return fmt.Errorf("agents.%s: %q is listed in both %s and %s", name, exp, prev, m.mode)
+					}
+					seen[exp] = m.mode
+				}
+			}
+		}
+	}
+	return nil
 }

@@ -47,9 +47,9 @@ func text(e Effect) classifier {
 	}
 }
 
-// names classifies a list of section names: naming a stack is not itself
-// exposure; the stack's own keys carry their usual labels.
-func names(v any) (Effect, error) {
+// stringList classifies a list of names: naming something is not itself
+// exposure; the named things carry their usual labels.
+func stringList(v any) (Effect, error) {
 	if _, ok := v.([]string); !ok {
 		return Neutral, fmt.Errorf("want a list of strings, got %T", v)
 	}
@@ -107,19 +107,34 @@ var labels = map[string]classifier{
 	"profile.name":                text(Narrows),
 	"profile.seed":                boolean(Neutral, Neutral),
 	"agents.*.binary":             text(Widens),
+	"agents.*.subcommands":        stringList,
+	"agents.*.paths.share":        exposure,
+	"agents.*.paths.copy":         exposure,
+	"agents.*.paths.private":      stringList,
+	"agents.*.paths.ro":           exposure,
 	"agents.*.mounts.read_only":   exposure,
 	"agents.*.mounts.read_write":  exposure,
 	"agents.*.env.pass":           exposure,
 	"agents.*.env.set":            exposure,
-	"include":                     names,
+	"agents.*.env.exclude":        stringList,
+	"sections.*.paths.share":      exposure,
+	"sections.*.paths.copy":       exposure,
+	"sections.*.paths.private":    stringList,
+	"sections.*.paths.ro":         exposure,
+	"include":                     stringList,
+	"default_agent":               text(Neutral),
 }
 
 // Classify returns the effect of setting key to value.  Agent keys use the
 // "agents.*" placeholder, and keys inside a named section use the
-// "sections.*" placeholder: a section's keys classify exactly like the
-// top-level keys they mirror.
+// "sections.*" placeholder.  Most section keys classify exactly like the
+// top-level keys they mirror, except a section's own paths, which are
+// listed explicitly.
 func Classify(key string, value any) (Effect, error) {
-	c, ok := labels[strings.TrimPrefix(key, "sections.*.")]
+	c, ok := labels[key]
+	if !ok {
+		c, ok = labels[strings.TrimPrefix(key, "sections.*.")]
+	}
 	if !ok {
 		return Neutral, fmt.Errorf("unknown setting %q", key)
 	}

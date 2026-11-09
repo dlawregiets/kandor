@@ -14,6 +14,10 @@ type File struct {
 	Git         GitSection              `toml:"git,omitempty"`
 	Profile     ProfileSection          `toml:"profile,omitempty"`
 	Agents      map[string]AgentSection `toml:"agents,omitempty"`
+	// DefaultAgent selects the agent to run: --agent and KANDOR_AGENT win
+	// over it, and it falls back to "opencode".  It is user-file only; a
+	// project file must not switch the agent out from under you.
+	DefaultAgent string `toml:"default_agent,omitempty"`
 	// Sections is a library of named, reusable stacks of settings (such as
 	// "go" or "python").  They apply only when included: the "default"
 	// section is always included, and a project file opts into more with
@@ -26,8 +30,9 @@ type File struct {
 }
 
 // Section is one named stack of settings.  It holds the same settable
-// settings as the top level of File, but cannot nest further sections or
-// carry its own include list, so resolution stays a single flat pass.
+// settings as the top level of File (including Paths, which apply to the
+// agent being run), but cannot nest further sections or carry its own
+// include list, so resolution stays a single flat pass.
 type Section struct {
 	Mounts      MountLists              `toml:"mounts,omitempty"`
 	Env         EnvSection              `toml:"env,omitempty"`
@@ -36,6 +41,9 @@ type Section struct {
 	Git         GitSection              `toml:"git,omitempty"`
 	Profile     ProfileSection          `toml:"profile,omitempty"`
 	Agents      map[string]AgentSection `toml:"agents,omitempty"`
+	// Paths applies to whichever agent is running when the section is
+	// included.
+	Paths AgentPaths `toml:"paths,omitempty"`
 }
 
 // layer returns the section as a File so it merges like any other layer.
@@ -88,9 +96,32 @@ type ProfileSection struct {
 
 // AgentSection holds the settings that apply only when one agent runs.
 type AgentSection struct {
-	Binary *string    `toml:"binary,omitempty"`
+	Binary *string `toml:"binary,omitempty"`
+	// Subcommands extends the agent's known subcommands (used to tell a
+	// project directory apart from a subcommand on the command line).
+	Subcommands []string `toml:"subcommands,omitempty"`
+	// Paths declares host state for the agent: share mounts it read-write
+	// (warned), copy seeds it into the profile once and mounts the copy
+	// read-write, private gives it a fresh profile directory while the
+	// host path stays hidden, and ro mounts it read-only.
+	Paths  AgentPaths `toml:"paths,omitempty"`
 	Mounts MountLists `toml:"mounts,omitempty"`
-	Env    EnvSection `toml:"env,omitempty"`
+	Env    AgentEnv   `toml:"env,omitempty"`
+}
+
+// AgentPaths holds the four host-state modes for one agent.
+type AgentPaths struct {
+	Share   []string `toml:"share,omitempty"`
+	Copy    []string `toml:"copy,omitempty"`
+	Private []string `toml:"private,omitempty"`
+	RO      []string `toml:"ro,omitempty"`
+}
+
+// AgentEnv is EnvSection plus the host variables one agent must never see.
+type AgentEnv struct {
+	Pass    []string          `toml:"pass,omitempty"`
+	Set     map[string]string `toml:"set,omitempty"`
+	Exclude []string          `toml:"exclude,omitempty"`
 }
 
 // NewSessionMode is sandbox.new_session: "auto", true or false.

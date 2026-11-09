@@ -146,10 +146,32 @@ func TestLoadBadNewSession(t *testing.T) {
 	}
 }
 
-func TestLoadUnknownAgent(t *testing.T) {
-	_, err := loadErr(t, "[agents.pi]\nbinary = \"/x\"\n")
-	if !strings.Contains(err.Error(), `unknown agent "pi"`) {
-		t.Errorf("error = %q", err)
+func TestLoadAgentNames(t *testing.T) {
+	f, err := Load(writeFile(t, "[agents.pi]\nbinary = \"/x\"\n"))
+	if err != nil {
+		t.Fatalf("Load([agents.pi]) error: %v", err)
+	}
+	if f.Agents["pi"].Binary == nil || *f.Agents["pi"].Binary != "/x" {
+		t.Errorf("pi agent not decoded: %+v", f.Agents)
+	}
+	for _, content := range []string{
+		"[agents.Pi]\n",
+		"[agents.bad name]\n",
+		"[agents.exec]\n",
+		"[agents.default]\n",
+		"default_agent = \"Exec\"\n",
+		"default_agent = \"exec\"\n",
+	} {
+		if _, err := loadErr(t, content); err == nil {
+			t.Errorf("Load(%q) succeeded, want error", content)
+		}
+	}
+	f, err = Load(writeFile(t, "default_agent = \"pi\"\n"))
+	if err != nil {
+		t.Fatalf("Load(default_agent) error: %v", err)
+	}
+	if f.DefaultAgent != "pi" {
+		t.Errorf("DefaultAgent = %q", f.DefaultAgent)
 	}
 }
 

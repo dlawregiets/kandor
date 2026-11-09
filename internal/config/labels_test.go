@@ -37,7 +37,8 @@ func TestKeysCoverSchema(t *testing.T) {
 		"sandbox.network", "sandbox.new_session", "credentials.ssh", "git.protect",
 		"profile.name", "env.set", "mounts.read_only", "agents.*.mounts.read_write",
 		"agents.*.binary", "agents.*.env.set", "include", "sections.*.mounts.read_write",
-		"sections.*.agents.*.binary",
+		"sections.*.agents.*.binary", "default_agent", "agents.*.paths.share",
+		"sections.*.paths.share", "agents.*.env.exclude",
 	} {
 		if !slices.Contains(keys, want) {
 			t.Errorf("Keys() is missing %q; got %v", want, keys)
@@ -71,6 +72,14 @@ func TestClassifyValues(t *testing.T) {
 		{"mounts.read_only", []string{}, Neutral},
 		{"env.set", map[string]string{"A": "1"}, Widens},
 		{"agents.*.binary", "/x", Widens},
+		{"agents.*.subcommands", []string{"mcp"}, Neutral},
+		{"agents.*.paths.share", []string{"x"}, Widens},
+		{"agents.*.paths.copy", []string{"x"}, Widens},
+		{"agents.*.paths.private", []string{"x"}, Neutral},
+		{"agents.*.paths.ro", []string{}, Neutral},
+		{"agents.*.env.exclude", []string{"X"}, Neutral},
+		{"sections.*.paths.share", []string{"x"}, Widens},
+		{"default_agent", "pi", Neutral},
 		{"include", []string{"go"}, Neutral},
 		{"include", []string{}, Neutral},
 		{"sections.*.mounts.read_write", []string{"x"}, Widens},
