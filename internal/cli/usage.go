@@ -20,6 +20,8 @@ Options:
   -C, --dir DIR           Project directory (default: current directory)
       --agent NAME          Coding agent to run (default: opencode, or
                            default_agent; KANDOR_AGENT overrides the file)
+      exec [--] CMD...      Run CMD in the sandbox instead of an agent;
+                           kandor options come before exec
       --ro PATH           Mount PATH read-only (repeatable)
       --rw PATH           Mount PATH read-write (repeatable)
       --env NAME[=VALUE]  Pass an environment variable into the sandbox
@@ -76,6 +78,7 @@ Examples:
   kandor --isolated auth login # stored in the isolated profile
   kandor --no-net --shell
   kandor --ro ~/.config/gcloud --rw ~/go -- run "build it"
+  kandor exec -- pytest -q
   kandor --init-config
   kandor --init-project
   kandor --dry-run

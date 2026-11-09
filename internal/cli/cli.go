@@ -19,9 +19,12 @@ type Request struct {
 	InitConfig, MigrateConfig bool
 	InitProject               bool
 	Shell, DryRun, Verbose    bool
-	// Agent selects the coding agent; "" resolves from KANDOR_AGENT,
-	// the user configuration, then the "opencode" default.
+	// Agent selects the coding agent; "" resolves from KANDOR_AGENT, the
+	// user configuration, then the "opencode" default.
 	Agent string
+	// Exec runs an arbitrary command instead of an agent.  AgentArgs is
+	// the command.
+	Exec bool
 }
 
 type option struct {
@@ -136,14 +139,68 @@ func AgentArg(args []string) string {
 	return ""
 }
 
+// execIndex finds a leading "exec" mode marker: the first positional that
+// is not a directory.  Kandor options before it still apply; everything
+// after it is the command.  A directory named exec keeps its meaning: use
+// -C exec (or ./exec) for that project.
+func execIndex(args []string, opts map[string]option) (int, bool) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return -1, false
+		}
+		if arg == "exec" {
+			return i, true
+		}
+		opt, known := opts[arg]
+		if !known {
+			if !strings.HasPrefix(arg, "-") && isDir(arg) {
+				continue
+			}
+			return -1, false
+		}
+		if opt.missing != "" {
+			if i+1 >= len(args) {
+				return -1, false
+			}
+			i++
+		}
+	}
+	return -1, false
+}
+
 // Parse parses args.  Parsing stops at "--" (dropped), at the first option
 // kandor does not know, or at the first positional argument; everything from
 // there is passed to the agent.  A positional argument that is an existing
 // directory and not an agent subcommand is the project directory, and
-// parsing continues after it.  --help and --version stop parsing.
+// parsing continues after it.  A leading "exec" switches to generic-command
+// mode instead: kandor options before it apply, everything after it is the
+// command.  --help and --version stop parsing.
 func Parse(args []string, isSubcommand func(string) bool) (Request, error) {
 	var r Request
 	opts := options(&r)
+	if i, ok := execIndex(args, opts); ok {
+		if err := parseInto(&r, opts, args[:i], isSubcommand); err != nil {
+			return Request{}, err
+		}
+		rest := args[i+1:]
+		if len(rest) > 0 && rest[0] == "--" {
+			rest = rest[1:]
+		}
+		if len(rest) == 0 {
+			return Request{}, errors.New("exec requires a command")
+		}
+		r.Exec = true
+		r.AgentArgs = rest
+		return r, nil
+	}
+	if err := parseInto(&r, opts, args, isSubcommand); err != nil {
+		return Request{}, err
+	}
+	return r, nil
+}
+
+func parseInto(r *Request, opts map[string]option, args []string, isSubcommand func(string) bool) error {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
@@ -166,17 +223,17 @@ func Parse(args []string, isSubcommand func(string) bool) (Request, error) {
 				if !strings.HasPrefix(msg, "-") {
 					msg = arg + " " + msg
 				}
-				return Request{}, errors.New(msg)
+				return errors.New(msg)
 			}
 			i++
 			value = args[i]
 		}
-		opt.apply(&r, value)
+		opt.apply(r, value)
 		if r.Help || r.Version {
 			break
 		}
 	}
-	return r, nil
+	return nil
 }
 
 func isDir(p string) bool {

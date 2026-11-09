@@ -243,3 +243,44 @@ func TestMainDryRunGenericAgent(t *testing.T) {
 		t.Errorf("dry-run is missing %q:\n%s", want, out)
 	}
 }
+
+func TestMainExecValidation(t *testing.T) {
+	configFile(t, "[agents.pi]\n")
+	if code, _, errs := call(t, "exec"); code != 1 || !strings.Contains(errs, "exec requires a command") {
+		t.Errorf("bare exec: code = %d, stderr = %q", code, errs)
+	}
+	if code, _, errs := call(t, "--shell", "exec", "--", "true"); code != 1 ||
+		!strings.Contains(errs, "--shell and exec are mutually exclusive") {
+		t.Errorf("--shell exec: code = %d, stderr = %q", code, errs)
+	}
+	if code, _, errs := call(t, "--agent", "pi", "exec", "--", "true"); code != 1 ||
+		!strings.Contains(errs, "exec does not take --agent") {
+		t.Errorf("--agent exec: code = %d, stderr = %q", code, errs)
+	}
+	if code, _, errs := call(t, "--isolated", "exec", "--", "true"); code != 1 ||
+		!strings.Contains(errs, "exec does not take --isolated, --profile or --no-seed") {
+		t.Errorf("--isolated exec: code = %d, stderr = %q", code, errs)
+	}
+}
+
+func TestMainDryRunExec(t *testing.T) {
+	requireBwrap(t)
+	configFile(t, "")
+	t.Setenv("KANDOR_BIN", "/usr/bin/true")
+	t.Setenv("KANDOR_HOME", t.TempDir())
+	project, _ := filepath.EvalSymlinks(t.TempDir())
+	code, out, errs := call(t, "-C", project, "--dry-run", "exec", "--", "/usr/bin/true", "hello")
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errs)
+	}
+	for _, want := range []string{
+		"--bind " + project + " " + project, "'/usr/bin/true' 'hello'",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("dry-run is missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "opencode") {
+		t.Errorf("exec run mentions opencode:\n%s", out)
+	}
+}

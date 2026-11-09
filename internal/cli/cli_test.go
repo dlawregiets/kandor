@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -200,5 +202,38 @@ func TestAgentArg(t *testing.T) {
 		if got := AgentArg(c.args); got != c.want {
 			t.Errorf("AgentArg(%q) = %q, want %q", c.args, got, c.want)
 		}
+	}
+}
+
+func TestParseExec(t *testing.T) {
+	r := parse(t, "exec", "--", "ls", "-la")
+	if !r.Exec || !slices.Equal(r.AgentArgs, []string{"ls", "-la"}) {
+		t.Errorf("exec: %+v", r)
+	}
+	r = parse(t, "--dry-run", "exec", "ls")
+	if !r.Exec || !r.DryRun || !slices.Equal(r.AgentArgs, []string{"ls"}) {
+		t.Errorf("exec with leading flags: %+v", r)
+	}
+	r = parse(t, "exec", "--dry-run")
+	if !r.Exec || r.DryRun || !slices.Equal(r.AgentArgs, []string{"--dry-run"}) {
+		t.Errorf("flags after exec are the command: %+v", r)
+	}
+	dir := t.TempDir()
+	r = parse(t, "-C", dir, "exec", "--", "true")
+	if !r.Exec || r.Overrides.ProjectDir != dir || !slices.Equal(r.AgentArgs, []string{"true"}) {
+		t.Errorf("exec with -C: %+v", r)
+	}
+	if _, err := Parse([]string{"exec"}, isSub); err == nil || err.Error() != "exec requires a command" {
+		t.Errorf("bare exec err = %v", err)
+	}
+	// A directory named exec keeps working with -C or ./exec; only a
+	// leading bare "exec" switches modes.
+	execDir := filepath.Join(dir, "exec")
+	if err := os.Mkdir(execDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r = parse(t, "-C", execDir, "run", "x")
+	if r.Exec || r.Overrides.ProjectDir != execDir {
+		t.Errorf("-C exec dir: %+v", r)
 	}
 }

@@ -106,6 +106,17 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err != nil {
 		return o.fail(err)
 	}
+	if req.Exec {
+		if req.Shell {
+			return o.fail(errors.New("--shell and exec are mutually exclusive"))
+		}
+		if req.Agent != "" {
+			return o.fail(errors.New("exec does not take --agent"))
+		}
+		if req.Overrides.Isolated != nil || req.Overrides.Profile != "" || req.Overrides.Seed != nil {
+			return o.fail(errors.New("exec does not take --isolated, --profile or --no-seed"))
+		}
+	}
 
 	home, err := validHome(os.Getenv("HOME"))
 	if err != nil {
@@ -131,16 +142,24 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	s, err := config.Merge(file, proj, req.Overrides, agentName, home, cwd, os.Getenv)
+	mergeAgent := agentName
+	if req.Exec {
+		// No agent runs: agent sections stay out of the merge.
+		mergeAgent = ""
+	}
+	s, err := config.Merge(file, proj, req.Overrides, mergeAgent, home, cwd, os.Getenv)
 	if err != nil {
 		return o.fail(err)
 	}
 	if haveProj {
-		if w := config.WideningKeys(proj, agentName); len(w) > 0 {
+		if w := config.WideningKeys(proj, mergeAgent); len(w) > 0 {
 			o.warn(fmt.Sprintf("%s widens the sandbox: %s", projPath, strings.Join(w, ", ")))
 		}
 	}
-	ag := agent.For(agentName, s.Agent)
+	var ag agent.Agent
+	if !req.Exec {
+		ag = agent.For(agentName, s.Agent)
+	}
 	if s.ProjectDir, err = validProject(s.ProjectDir, home); err != nil {
 		return o.fail(err)
 	}
@@ -157,9 +176,22 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return o.fail(err)
 	}
 
-	binary, err := findBinary(req.Shell, s.AgentBinary, ag)
-	if err != nil {
-		return o.fail(err)
+	var binary string
+	var execCmd []string
+	if req.Exec {
+		var execArgs []string
+		if binary, execArgs, err = resolveExec(req.AgentArgs); err != nil {
+			return o.fail(err)
+		}
+		execCmd = append([]string{binary}, execArgs...)
+		if s.Isolated {
+			o.warn("exec always uses a temporary profile; ignoring the isolated profile settings")
+			s.Isolated = false
+		}
+	} else {
+		if binary, err = findBinary(req.Shell, s.AgentBinary, ag); err != nil {
+			return o.fail(err)
+		}
 	}
 
 	resolve := func(env, fallback string) string {
@@ -192,16 +224,30 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return o.fail(err)
 	}
 	defer cleanup()
-	layout.Writable = writableMounts(s.Mounts)
-	state, err := ag.Prepare(layout, o.warn)
-	if err != nil {
-		return o.fail(err)
+	if req.Exec {
+		// No agent state: XDG data gets a private temporary directory
+		// instead of the host's.
+		execData, err := os.MkdirTemp("", "kandor-exec-data")
+		if err != nil {
+			return o.fail(err)
+		}
+		defer os.RemoveAll(execData)
+		layout.Data = execData
 	}
-	// Host-state paths declared by [agents.<name>] (built-in defaults plus
-	// the merged user, section and project layers) become extra binds.
-	spec := agent.Resolve(ag.Name(), s.Agent)
-	state.Binds = append(state.Binds,
-		agent.Materialize(spec, filepath.Join(layout.Cache, ag.Name(), "paths"), home, o.warn)...)
+	layout.Writable = writableMounts(s.Mounts)
+	state := agent.State{}
+	if !req.Exec {
+		var err error
+		if state, err = ag.Prepare(layout, o.warn); err != nil {
+			return o.fail(err)
+		}
+		// Host-state paths declared by [agents.<name>] (built-in defaults
+		// plus the merged user, section and project layers) become extra
+		// binds.
+		spec := agent.Resolve(ag.Name(), s.Agent)
+		state.Binds = append(state.Binds,
+			agent.Materialize(spec, filepath.Join(layout.Cache, ag.Name(), "paths"), home, o.warn)...)
+	}
 
 	newSession, explicit := sandbox.NewSessionDefault(s.NewSession, sandbox.TIOCSTIPath)
 	if newSession && !explicit {
@@ -246,7 +292,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		RuntimeDir:      runtimeDir,
 		Layout:          layout,
 		AgentEnv:        state.Env,
-		Exclude:         ag.ExcludeEnv,
+		Exclude:         excludeEnv(ag),
 		Extra:           s.Env,
 		SSHAuthSock:     mounts.SSHAuthSock,
 		GitConfigGlobal: mounts.GitConfigGlobal,
@@ -258,7 +304,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	env := sandbox.EnvList(vars)
 
 	var cmd []string
-	if req.Shell {
+	if req.Exec {
+		cmd = execCmd
+	} else if req.Shell {
 		cmd = append([]string{binary, "-l"}, req.AgentArgs...)
 	} else if cmd, err = ag.Command(binary, req.AgentArgs); err != nil {
 		return o.fail(err)
@@ -357,6 +405,37 @@ func validProject(dir, home string) (string, error) {
 		return "", errors.New("the project directory may not be an ancestor of HOME")
 	}
 	return resolved, nil
+}
+
+// excludeEnv adapts a possibly absent agent to the environment filter.
+func excludeEnv(ag agent.Agent) func(string) bool {
+	if ag == nil {
+		return nil
+	}
+	return ag.ExcludeEnv
+}
+
+// resolveExec resolves an exec command the way findBinary resolves agent
+// binaries: a slash runs the path itself, otherwise PATH is searched.
+func resolveExec(argv []string) (bin string, args []string, err error) {
+	name := argv[0]
+	if strings.Contains(name, "/") {
+		bin = name
+	} else {
+		found, lookErr := exec.LookPath(name)
+		if lookErr != nil {
+			return "", nil, fmt.Errorf("%s was not found in PATH", name)
+		}
+		bin = found
+	}
+	resolved, err := paths.Resolve(bin)
+	if err != nil {
+		return "", nil, fmt.Errorf("cannot resolve %s", name)
+	}
+	if !executable(resolved) {
+		return "", nil, fmt.Errorf("%s is not executable: %s", name, resolved)
+	}
+	return resolved, argv[1:], nil
 }
 
 // findBinary resolves the debug shell or the agent's executable.
