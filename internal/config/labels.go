@@ -8,8 +8,9 @@ import (
 )
 
 // Effect says whether a setting's value makes the sandbox stricter or more
-// permissive.  A future per-project configuration layer applies narrowing
-// settings automatically and asks before applying widening ones.
+// permissive.  The project configuration layer applies every setting but
+// warns about widening ones, so a borrowed repository cannot silently widen
+// its own sandbox.
 type Effect int
 
 const (
@@ -44,6 +45,15 @@ func text(e Effect) classifier {
 		}
 		return e, nil
 	}
+}
+
+// names classifies a list of section names: naming a stack is not itself
+// exposure; the stack's own keys carry their usual labels.
+func names(v any) (Effect, error) {
+	if _, ok := v.([]string); !ok {
+		return Neutral, fmt.Errorf("want a list of strings, got %T", v)
+	}
+	return Neutral, nil
 }
 
 // exposure covers lists and tables that expose host paths or variables: any
@@ -101,12 +111,15 @@ var labels = map[string]classifier{
 	"agents.*.mounts.read_write":  exposure,
 	"agents.*.env.pass":           exposure,
 	"agents.*.env.set":            exposure,
+	"include":                     names,
 }
 
 // Classify returns the effect of setting key to value.  Agent keys use the
-// "agents.*" placeholder.
+// "agents.*" placeholder, and keys inside a named section use the
+// "sections.*" placeholder: a section's keys classify exactly like the
+// top-level keys they mirror.
 func Classify(key string, value any) (Effect, error) {
-	c, ok := labels[key]
+	c, ok := labels[strings.TrimPrefix(key, "sections.*.")]
 	if !ok {
 		return Neutral, fmt.Errorf("unknown setting %q", key)
 	}

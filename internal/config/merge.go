@@ -10,38 +10,98 @@ import (
 
 var profileName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
-// Merge applies built-in defaults, then the file's top-level sections, then
-// the file's section for agent, then the command line.
-func Merge(f *File, o Overrides, agent, home, cwd string, getenv func(string) string) (Settings, error) {
+// ResolveProjectDir applies the -C/positional project directory override to
+// the current directory.
+func ResolveProjectDir(o Overrides, cwd string) string {
+	if o.ProjectDir != "" {
+		return o.ProjectDir
+	}
+	return cwd
+}
+
+// Merge applies built-in defaults, then the user file's top-level keys, its
+// "default" section, its included sections, the project file's included
+// sections and own keys, then the agent sections, then the command line.
+// Later layers win: a later mount of the same path and a later variable of
+// the same name override earlier ones.
+func Merge(user, project *File, o Overrides, agent, home, cwd string, getenv func(string) string) (Settings, error) {
+	if user == nil {
+		user = &File{}
+	}
+	if project == nil {
+		project = &File{}
+	}
+	if len(project.Sections) > 0 {
+		return Settings{}, fmt.Errorf("sections must be defined in the user configuration file, not the project one")
+	}
+	layers, err := resolveLayers(user, project)
+	if err != nil {
+		return Settings{}, err
+	}
+
 	s := Settings{
-		ProjectDir:     cwd,
+		ProjectDir:     ResolveProjectDir(o, cwd),
 		Network:        true,
 		MountGitConfig: true,
 		ProtectGit:     true,
 		Seed:           true,
 		Profile:        "default",
 	}
-	a := f.Agents[agent]
 
-	set(&s.Network, f.Sandbox.Network, o.Network)
-	set(&s.AllowUserns, f.Sandbox.AllowUserns, o.AllowUserns)
-	set(&s.NewSession, f.Sandbox.NewSession, o.NewSession)
-	set(&s.SSH, f.Credentials.SSH, o.SSH)
-	set(&s.SSHAgent, f.Credentials.SSHAgent, o.SSHAgent)
-	set(&s.GitCredentials, f.Credentials.GitCredentials, o.GitCredentials)
-	set(&s.Netrc, f.Credentials.Netrc, o.Netrc)
-	set(&s.Npmrc, f.Credentials.Npmrc, o.Npmrc)
-	set(&s.MountGitConfig, f.Git.MountConfig, o.MountGitConfig)
-	set(&s.ProtectGit, f.Git.Protect, o.ProtectGit)
-	set(&s.Seed, f.Profile.Seed, o.Seed)
+	for _, l := range layers {
+		set(&s.Network, l.Sandbox.Network)
+		set(&s.AllowUserns, l.Sandbox.AllowUserns)
+		set(&s.NewSession, l.Sandbox.NewSession)
+		set(&s.SSH, l.Credentials.SSH)
+		set(&s.SSHAgent, l.Credentials.SSHAgent)
+		set(&s.GitCredentials, l.Credentials.GitCredentials)
+		set(&s.Netrc, l.Credentials.Netrc)
+		set(&s.Npmrc, l.Credentials.Npmrc)
+		set(&s.MountGitConfig, l.Git.MountConfig)
+		set(&s.ProtectGit, l.Git.Protect)
+		set(&s.Seed, l.Profile.Seed)
 
-	// A profile name implies an isolated profile, like --profile, unless the
-	// file also says explicitly whether to isolate.
-	if f.Profile.Name != nil {
-		s.Profile = *f.Profile.Name
-		s.Isolated = true
+		// A profile name implies an isolated profile, like --profile,
+		// unless the same layer also says explicitly whether to isolate.
+		if l.Profile.Name != nil {
+			s.Profile = *l.Profile.Name
+			s.Isolated = true
+		}
+		set(&s.Isolated, l.Profile.Isolated)
+
+		mounts, err := expandLayer(lists(l.Mounts), home)
+		if err != nil {
+			return Settings{}, err
+		}
+		s.Mounts = append(s.Mounts, mounts...)
+		s.Env = append(s.Env, envSpecs(l.Env)...)
 	}
-	set(&s.Isolated, f.Profile.Isolated, o.Isolated)
+
+	for _, l := range layers {
+		a := l.Agents[agent]
+		mounts, err := expandLayer(lists(a.Mounts), home)
+		if err != nil {
+			return Settings{}, err
+		}
+		s.Mounts = append(s.Mounts, mounts...)
+		s.Env = append(s.Env, envSpecs(a.Env)...)
+		if a.Binary != nil {
+			s.AgentBinary = *a.Binary
+		}
+	}
+
+	set(&s.Network, o.Network)
+	set(&s.AllowUserns, o.AllowUserns)
+	set(&s.NewSession, o.NewSession)
+	set(&s.SSH, o.SSH)
+	set(&s.SSHAgent, o.SSHAgent)
+	set(&s.GitCredentials, o.GitCredentials)
+	set(&s.Netrc, o.Netrc)
+	set(&s.Npmrc, o.Npmrc)
+	set(&s.MountGitConfig, o.MountGitConfig)
+	set(&s.ProtectGit, o.ProtectGit)
+	set(&s.Seed, o.Seed)
+	set(&s.Isolated, o.Isolated)
 	if o.Profile != "" {
 		s.Profile = o.Profile
 	}
@@ -49,28 +109,53 @@ func Merge(f *File, o Overrides, agent, home, cwd string, getenv func(string) st
 		return Settings{}, fmt.Errorf("invalid profile name '%s' (use letters, digits, '.', '_' and '-')", s.Profile)
 	}
 
-	if o.ProjectDir != "" {
-		s.ProjectDir = o.ProjectDir
+	cliMounts, err := expandLayer(o.Mounts, home)
+	if err != nil {
+		return Settings{}, err
 	}
-
-	layers := [][]MountSpec{lists(f.Mounts), lists(a.Mounts), o.Mounts}
-	for _, layer := range layers {
-		mounts, err := expandLayer(layer, home)
-		if err != nil {
-			return Settings{}, err
-		}
-		s.Mounts = append(s.Mounts, mounts...)
-	}
-
-	s.Env = append(s.Env, envSpecs(f.Env)...)
-	s.Env = append(s.Env, envSpecs(a.Env)...)
+	s.Mounts = append(s.Mounts, cliMounts...)
 	s.Env = append(s.Env, o.Env...)
 
-	s.AgentBinary = getenv("KANDOR_BIN")
-	if s.AgentBinary == "" && a.Binary != nil {
-		s.AgentBinary = *a.Binary
+	if v := getenv("KANDOR_BIN"); v != "" {
+		s.AgentBinary = v
 	}
 	return s, nil
+}
+
+// resolveLayers orders the file layers: the user file, its "default"
+// section, its included sections, the project file's included sections and
+// the project file itself.  Each named section applies at most once.
+func resolveLayers(user, project *File) ([]*File, error) {
+	layers := []*File{user}
+	applied := map[string]bool{}
+	apply := func(name, where string) error {
+		if applied[name] {
+			return nil
+		}
+		sec, ok := user.Sections[name]
+		if !ok {
+			return fmt.Errorf("unknown section %q in the %s include list", name, where)
+		}
+		applied[name] = true
+		layers = append(layers, sec.layer())
+		return nil
+	}
+	if _, ok := user.Sections["default"]; ok {
+		if err := apply("default", "user file's"); err != nil {
+			return nil, err
+		}
+	}
+	for _, name := range user.Include {
+		if err := apply(name, "user file's"); err != nil {
+			return nil, err
+		}
+	}
+	for _, name := range project.Include {
+		if err := apply(name, "project file's"); err != nil {
+			return nil, err
+		}
+	}
+	return append(layers, project), nil
 }
 
 // set applies the file value, then the command-line value, when present.

@@ -31,11 +31,11 @@ func TestTemplateUncommentedIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("uncommented template does not load: %v\n%s", err, b.String())
 	}
-	s, err := Merge(f, Overrides{}, "opencode", "/h", "/cwd", env(nil))
+	s, err := Merge(f, nil, Overrides{}, "opencode", "/h", "/cwd", env(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, _ := Merge(&File{}, Overrides{}, "opencode", "/h", "/cwd", env(nil))
+	d, _ := Merge(&File{}, nil, Overrides{}, "opencode", "/h", "/cwd", env(nil))
 	if !reflect.DeepEqual(s, d) {
 		t.Errorf("uncommented template differs from defaults:\n%+v\n%+v", s, d)
 	}
@@ -45,6 +45,13 @@ func TestTemplateMentionsEveryKey(t *testing.T) {
 	tmpl := Template()
 	for _, k := range Keys() {
 		k = strings.Replace(k, "agents.*", "agents.opencode", 1)
+		k = strings.Replace(k, "sections.*", "sections.example", 1)
+		if !strings.Contains(k, ".") {
+			if !strings.Contains(tmpl, "# "+k+" ") {
+				t.Errorf("Template() does not show %s", k)
+			}
+			continue
+		}
 		section, name := k[:strings.LastIndex(k, ".")], k[strings.LastIndex(k, ".")+1:]
 		if name == "set" {
 			if !strings.Contains(tmpl, "["+k+"]") {

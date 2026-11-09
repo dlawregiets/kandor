@@ -74,11 +74,15 @@ Examples:
   kandor --init-config
   kandor --dry-run
 
-Configuration file:
+Configuration files:
   $KANDOR_CONFIG, or $XDG_CONFIG_HOME/kandor/config.toml
-  (default ~/.config/kandor/config.toml).  TOML with the sections [mounts],
-  [env], [sandbox], [credentials], [git], [profile] and [agents.opencode].
-  Run 'kandor --init-config' for a commented example.  Command-line options
-  override the file; for mounts of the same path, the later layer wins
-  (file, then [agents.opencode], then the command line).
+  (default ~/.config/kandor/config.toml), plus .kandor.toml in the project
+  directory.  TOML with the sections [mounts], [env], [sandbox],
+  [credentials], [git], [profile] and [agents.opencode]; the user file may
+  also define reusable [sections.NAME] stacks that a project file opts into
+  with include = [...] ([sections.default] always applies).
+  Run 'kandor --init-config' for a commented example.  Layers apply in order,
+  later wins: user file, its default and included sections, the project
+  file, [agents.opencode], the command line.  Project keys that widen the
+  sandbox print a warning.
 `

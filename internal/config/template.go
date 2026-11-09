@@ -11,7 +11,11 @@ const template = `# kandor configuration file
 #
 # Every setting is commented out and shows its default.  Delete the leading
 # "# " to change one.  Command-line options override this file, and unknown
-# settings are errors.
+# settings are errors.  A ".kandor.toml" file in the project directory adds
+# project-specific settings and an include list on top of this file; the
+# "default" section below always applies.
+
+# include = []  # named stacks from [sections.*] to always apply, e.g. ["go"]
 
 # [mounts]
 # read_only  = []  # host paths mounted read-only, e.g. ["~/.config/gcloud"]
@@ -54,6 +58,52 @@ const template = `# kandor configuration file
 # pass = []
 
 # [agents.opencode.env.set]
+
+# [sections.example]  # a reusable stack of settings, e.g. [sections.go].
+# A project opts in with its own include list in .kandor.toml; the default
+# stack, when defined, always applies.  Sections hold the same settings as
+# the top level of this file.
+# [sections.example.mounts]  # like [mounts], but only for includers
+# read_only  = []
+# read_write = []
+
+# [sections.example.env]  # like [env], but only for includers
+# pass = []
+
+# [sections.example.env.set]
+
+# [sections.example.sandbox]
+# network      = true
+# allow_userns = false
+# new_session  = "auto"
+
+# [sections.example.credentials]
+# ssh             = false
+# ssh_agent       = false
+# git_credentials = false
+# netrc           = false
+# npmrc           = false
+
+# [sections.example.git]
+# mount_config = true
+# protect      = true
+
+# [sections.example.profile]
+# isolated = false
+# name     = "default"
+# seed     = true
+
+# [sections.example.agents.opencode]
+# binary = ""
+
+# [sections.example.agents.opencode.mounts]
+# read_only  = []
+# read_write = []
+
+# [sections.example.agents.opencode.env]
+# pass = []
+
+# [sections.example.agents.opencode.env.set]
 `
 
 // Template returns a configuration file with every setting commented out.

@@ -60,7 +60,7 @@ func TestConvertLegacyProfileOrder(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		s, err := Merge(f, Overrides{}, "opencode", "/h", "/cwd", env(nil))
+		s, err := Merge(f, nil, Overrides{}, "opencode", "/h", "/cwd", env(nil))
 		if err != nil {
 			t.Fatal(err)
 		}

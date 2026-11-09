@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/dlawregiets/kandor/internal/agent"
 	"github.com/dlawregiets/kandor/internal/cli"
@@ -92,9 +93,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return o.fail(err)
 	}
-	s, err := config.Merge(file, req.Overrides, ag.Name(), home, cwd, os.Getenv)
+	projDir := config.ResolveProjectDir(req.Overrides, cwd)
+	projPath := config.ProjectPath(projDir)
+	proj, haveProj, err := config.LoadProject(projDir)
 	if err != nil {
 		return o.fail(err)
+	}
+	s, err := config.Merge(file, proj, req.Overrides, ag.Name(), home, cwd, os.Getenv)
+	if err != nil {
+		return o.fail(err)
+	}
+	if haveProj {
+		if w := config.WideningKeys(proj, ag.Name()); len(w) > 0 {
+			o.warn(fmt.Sprintf("%s widens the sandbox: %s", projPath, strings.Join(w, ", ")))
+		}
 	}
 	if s.ProjectDir, err = validProject(s.ProjectDir, home); err != nil {
 		return o.fail(err)
@@ -216,6 +228,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	if req.Verbose {
 		o.log("project:  " + s.ProjectDir)
+		if haveProj {
+			o.log("project config: " + projPath)
+		}
 		if s.Isolated {
 			o.log(fmt.Sprintf("profile:  %s (%s)", s.Profile, layout.ProfileRoot))
 		} else {

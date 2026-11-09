@@ -392,13 +392,55 @@ Paths may start with `~` or `$HOME`. Unknown sections and keys, values of the
 wrong type and agents other than `opencode` are errors, so a typo cannot
 silently change the sandbox.
 
+### Per-project configuration
+
+A `.kandor.toml` file in the project directory adds project-specific settings
+on top of the user file. It accepts the same keys, plus an `include` list
+that opts into reusable stacks defined in the user file:
+
+```toml
+# ~/code/my-go-project/.kandor.toml
+include = ["go"]
+
+[env.set]
+GOTOOLCHAIN = "local"
+```
+
+The user file may define any number of named stacks under `[sections.*]`,
+with the same settings as the top level. The `[sections.default]` stack, when
+defined, always applies:
+
+```toml
+# ~/.config/kandor/config.toml
+[sections.default.mounts]
+read_write = ["~/.cache/go-build"]
+
+[sections.go.mounts]
+read_write = ["~/go"]
+
+[sections.go.env.set]
+GOCACHE = "/home/you/.cache/go-build"
+
+[sections.python.mounts]
+read_write = ["~/.cache/uv"]
+```
+
+Layers apply in order and the later layer wins: the user file's top-level
+keys, its `default` section, its own `include` list, the project file's
+`include` list, the project file's own keys, `[agents.opencode]`, then the
+command line. (A `sections` table in a project file is an error: stacks live
+in the user file.) Because a borrowed repository should not silently widen
+its own sandbox, project keys that widen it (extra mounts, environment,
+credentials, ...) print a `kandor: warning:` naming the file and the keys.
+
 Create a commented starter file with `kandor --init-config` (it uses
 `$KANDOR_CONFIG` when that is set and never overwrites an existing file).
 
-Command-line options override the file. Lists such as mounts and
-environment variables add to the file's lists. When the same path is mounted
-more than once, the later layer wins, in the order: the file's top-level
-sections, the `[agents.opencode]` section, the command line. So `--ro PATH`
+Command-line options override the files. Lists such as mounts and
+environment variables add to the files' lists. When the same path is mounted
+more than once, the later layer wins, in the order: the user file, its
+`default` and included sections, the project file, the `[agents.opencode]`
+section, the command line. So `--ro PATH`
 makes a configured `read_write` path read-only for one run, and `--rw PATH`
 makes a `read_only` path writable. Listing the same path as both
 `read_only` and `read_write` in one layer is an error.

@@ -14,6 +14,41 @@ type File struct {
 	Git         GitSection              `toml:"git,omitempty"`
 	Profile     ProfileSection          `toml:"profile,omitempty"`
 	Agents      map[string]AgentSection `toml:"agents,omitempty"`
+	// Sections is a library of named, reusable stacks of settings (such as
+	// "go" or "python").  They apply only when included: the "default"
+	// section is always included, and a project file opts into more with
+	// "include".  Sections may only be defined in the user configuration
+	// file, not in a project one.
+	Sections map[string]Section `toml:"sections,omitempty"`
+	// Include names sections from Sections to apply on top of the file's
+	// own keys.  In a project file it opts into the user's stacks.
+	Include []string `toml:"include,omitempty"`
+}
+
+// Section is one named stack of settings.  It holds the same settable
+// settings as the top level of File, but cannot nest further sections or
+// carry its own include list, so resolution stays a single flat pass.
+type Section struct {
+	Mounts      MountLists              `toml:"mounts,omitempty"`
+	Env         EnvSection              `toml:"env,omitempty"`
+	Sandbox     SandboxSection          `toml:"sandbox,omitempty"`
+	Credentials CredentialsSection      `toml:"credentials,omitempty"`
+	Git         GitSection              `toml:"git,omitempty"`
+	Profile     ProfileSection          `toml:"profile,omitempty"`
+	Agents      map[string]AgentSection `toml:"agents,omitempty"`
+}
+
+// layer returns the section as a File so it merges like any other layer.
+func (s *Section) layer() *File {
+	return &File{
+		Mounts:      s.Mounts,
+		Env:         s.Env,
+		Sandbox:     s.Sandbox,
+		Credentials: s.Credentials,
+		Git:         s.Git,
+		Profile:     s.Profile,
+		Agents:      s.Agents,
+	}
 }
 
 type MountLists struct {

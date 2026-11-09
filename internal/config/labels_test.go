@@ -36,7 +36,8 @@ func TestKeysCoverSchema(t *testing.T) {
 	for _, want := range []string{
 		"sandbox.network", "sandbox.new_session", "credentials.ssh", "git.protect",
 		"profile.name", "env.set", "mounts.read_only", "agents.*.mounts.read_write",
-		"agents.*.binary", "agents.*.env.set",
+		"agents.*.binary", "agents.*.env.set", "include", "sections.*.mounts.read_write",
+		"sections.*.agents.*.binary",
 	} {
 		if !slices.Contains(keys, want) {
 			t.Errorf("Keys() is missing %q; got %v", want, keys)
@@ -70,6 +71,11 @@ func TestClassifyValues(t *testing.T) {
 		{"mounts.read_only", []string{}, Neutral},
 		{"env.set", map[string]string{"A": "1"}, Widens},
 		{"agents.*.binary", "/x", Widens},
+		{"include", []string{"go"}, Neutral},
+		{"include", []string{}, Neutral},
+		{"sections.*.mounts.read_write", []string{"x"}, Widens},
+		{"sections.*.sandbox.network", false, Narrows},
+		{"sections.*.agents.*.binary", "/x", Widens},
 	}
 	for _, c := range cases {
 		got, err := Classify(c.key, c.value)

@@ -10,7 +10,12 @@ func ptr[T any](v T) *T { return &v }
 
 func merge(t *testing.T, f *File, o Overrides, envm map[string]string) Settings {
 	t.Helper()
-	s, err := Merge(f, o, "opencode", "/h", "/cwd", env(envm))
+	return mergeProj(t, f, nil, o, envm)
+}
+
+func mergeProj(t *testing.T, user, proj *File, o Overrides, envm map[string]string) Settings {
+	t.Helper()
+	s, err := Merge(user, proj, o, "opencode", "/h", "/cwd", env(envm))
 	if err != nil {
 		t.Fatalf("Merge error: %v", err)
 	}
@@ -73,7 +78,7 @@ func TestMergeMountOrder(t *testing.T) {
 
 func TestMergeSameLayerConflict(t *testing.T) {
 	f := &File{Mounts: MountLists{ReadOnly: []string{"~/a"}, ReadWrite: []string{"$HOME/a"}}}
-	_, err := Merge(f, Overrides{}, "opencode", "/h", "/cwd", env(nil))
+	_, err := Merge(f, nil, Overrides{}, "opencode", "/h", "/cwd", env(nil))
 	if err == nil || !strings.Contains(err.Error(), `"/h/a" is listed as both read_only and read_write`) {
 		t.Errorf("err = %v", err)
 	}
@@ -81,7 +86,7 @@ func TestMergeSameLayerConflict(t *testing.T) {
 
 func TestMergeCommandLineConflict(t *testing.T) {
 	o := Overrides{Mounts: []MountSpec{{Path: "/x", Writable: false}, {Path: "/x", Writable: true}}}
-	if _, err := Merge(&File{}, o, "opencode", "/h", "/cwd", env(nil)); err == nil {
+	if _, err := Merge(&File{}, nil, o, "opencode", "/h", "/cwd", env(nil)); err == nil {
 		t.Error("--ro X --rw X on one command line was accepted")
 	}
 }
@@ -109,8 +114,98 @@ func TestMergeAgentBinary(t *testing.T) {
 }
 
 func TestMergeInvalidProfile(t *testing.T) {
-	_, err := Merge(&File{}, Overrides{Profile: "../x"}, "opencode", "/h", "/cwd", env(nil))
+	_, err := Merge(&File{}, nil, Overrides{Profile: "../x"}, "opencode", "/h", "/cwd", env(nil))
 	if err == nil || !strings.Contains(err.Error(), "invalid profile name '../x'") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+func TestMergeDefaultSectionAlwaysIncluded(t *testing.T) {
+	user := &File{
+		Env: EnvSection{Set: map[string]string{"A": "top"}},
+		Sections: map[string]Section{
+			"default": {Env: EnvSection{Set: map[string]string{"A": "default", "B": "default"}}},
+			"go":      {Env: EnvSection{Set: map[string]string{"C": "go"}}},
+		},
+	}
+	s := mergeProj(t, user, &File{}, Overrides{}, nil)
+	want := []EnvSpec{{"A", "top", true}, {"A", "default", true}, {"B", "default", true}}
+	// The "go" section is not included, so C is absent.
+	if !reflect.DeepEqual(s.Env, want) {
+		t.Errorf("Env = %+v, want %+v", s.Env, want)
+	}
+}
+
+func TestMergeIncludeOrder(t *testing.T) {
+	user := &File{
+		Env:     EnvSection{Set: map[string]string{"A": "top"}},
+		Include: []string{"go"},
+		Sections: map[string]Section{
+			"default": {Env: EnvSection{Set: map[string]string{"A": "default"}}},
+			"go":      {Env: EnvSection{Set: map[string]string{"A": "go-user"}}},
+			"python":  {Env: EnvSection{Set: map[string]string{"A": "python"}}},
+		},
+	}
+	proj := &File{
+		Include: []string{"python", "go"},
+		Env:     EnvSection{Set: map[string]string{"A": "project"}},
+	}
+	s := mergeProj(t, user, proj, Overrides{Env: []EnvSpec{{Name: "A", Value: "cli", HasValue: true}}}, nil)
+	var got []string
+	for _, e := range s.Env {
+		got = append(got, e.Value)
+	}
+	want := []string{"top", "default", "go-user", "python", "project", "cli"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Env order = %v, want %v", got, want)
+	}
+}
+
+func TestMergeUnknownSection(t *testing.T) {
+	user := &File{Sections: map[string]Section{"go": {}}}
+	proj := &File{Include: []string{"rust"}}
+	_, err := Merge(user, proj, Overrides{}, "opencode", "/h", "/cwd", env(nil))
+	if err == nil || !strings.Contains(err.Error(), `unknown section "rust" in the project file's include list`) {
+		t.Errorf("err = %v", err)
+	}
+	_, err = Merge(&File{Include: []string{"rust"}}, nil, Overrides{}, "opencode", "/h", "/cwd", env(nil))
+	if err == nil || !strings.Contains(err.Error(), `unknown section "rust" in the user file's include list`) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestMergeProjectSectionsRejected(t *testing.T) {
+	proj := &File{Sections: map[string]Section{"go": {}}}
+	_, err := Merge(&File{}, proj, Overrides{}, "opencode", "/h", "/cwd", env(nil))
+	if err == nil || !strings.Contains(err.Error(), "sections must be defined in the user configuration file") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestMergeSectionAgentLayer(t *testing.T) {
+	user := &File{
+		Mounts: MountLists{ReadOnly: []string{"~/top"}},
+		Agents: map[string]AgentSection{"opencode": {Mounts: MountLists{ReadOnly: []string{"~/agent"}}}},
+		Sections: map[string]Section{
+			"go": {
+				Mounts: MountLists{ReadOnly: []string{"~/go"}},
+				Agents: map[string]AgentSection{"opencode": {Mounts: MountLists{ReadOnly: []string{"~/go-agent"}}}},
+			},
+		},
+	}
+	proj := &File{
+		Include: []string{"go"},
+		Mounts:  MountLists{ReadOnly: []string{"~/proj"}},
+	}
+	s := mergeProj(t, user, proj, Overrides{}, nil)
+	var got []string
+	for _, m := range s.Mounts {
+		got = append(got, m.Path)
+	}
+	// Top layers first (user, section, project), then agent layers in the
+	// same order, so agent settings keep beating plain ones.
+	want := []string{"/h/top", "/h/go", "/h/proj", "/h/agent", "/h/go-agent"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Mounts = %v, want %v", got, want)
 	}
 }
