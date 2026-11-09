@@ -197,7 +197,7 @@ func TestMainDryRunAgentPaths(t *testing.T) {
 func TestMainUnknownAgent(t *testing.T) {
 	configFile(t, "")
 	code, _, errs := call(t, "--agent", "bogus", "--dry-run")
-	if code != 1 || !strings.Contains(errs, `unknown agent "bogus" (known: opencode)`) {
+	if code != 1 || !strings.Contains(errs, `unknown agent "bogus" (known: claude, opencode)`) {
 		t.Errorf("code = %d, stderr = %q", code, errs)
 	}
 }

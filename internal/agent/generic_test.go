@@ -60,7 +60,7 @@ func TestSubcommandsUnion(t *testing.T) {
 
 func TestKnownAgents(t *testing.T) {
 	known := Known(map[string]config.AgentSection{"pi": {}, "copilot": {}})
-	if !slices.Equal(known, []string{"copilot", "opencode", "pi"}) {
+	if !slices.Equal(known, []string{"claude", "copilot", "opencode", "pi"}) {
 		t.Errorf("Known = %v", known)
 	}
 }

@@ -131,3 +131,24 @@ func TestStoreRel(t *testing.T) {
 		t.Errorf("storeRel = %q", got)
 	}
 }
+
+func TestBuiltinClaude(t *testing.T) {
+	s := Resolve("claude", config.AgentSection{})
+	if s.Name != "claude" || s.Binary != "claude" {
+		t.Errorf("identity = %+v", s)
+	}
+	if !slices.Contains(s.Subcommands, "mcp") || !slices.Contains(s.Subcommands, "doctor") {
+		t.Errorf("Subcommands = %v", s.Subcommands)
+	}
+	if !slices.Equal(s.Copy, []string{"~/.claude", "~/.claude.json"}) {
+		t.Errorf("Copy = %v", s.Copy)
+	}
+	if !slices.Equal(s.EnvExclude, []string{"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"}) {
+		t.Errorf("EnvExclude = %v", s.EnvExclude)
+	}
+	// User configuration wins over the built-in defaults.
+	s = Resolve("claude", config.AgentSection{Binary: ptr("/opt/claude")})
+	if s.Binary != "/opt/claude" || len(s.Copy) != 2 {
+		t.Errorf("override = %+v", s)
+	}
+}

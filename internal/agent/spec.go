@@ -32,6 +32,21 @@ var builtinSpecs = []Spec{
 		Subcommands: slices.Clone(opencodeSubcommands),
 		EnvExclude:  slices.Clone(opencodeExcluded),
 	},
+	{
+		// Probed against Claude Code 2.1 (claude --help and its binary).
+		Name: "claude",
+		Subcommands: []string{
+			"agents", "attach", "auth", "doctor", "install", "logs",
+			"mcp", "plugin", "plugins", "rm", "setup-token",
+			"stop", "kill", "update", "upgrade",
+		},
+		// Settings and login live together; copy both into the profile
+		// so the sandbox never reads or writes the host's.
+		Copy: []string{"~/.claude", "~/.claude.json"},
+		// CLAUDECODE=1 marks child processes; the entrypoint names the
+		// parent session.  Neither may flow back in.
+		EnvExclude: []string{"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"},
+	},
 }
 
 // builtin returns the built-in defaults for a known agent.  OpenCode keeps
