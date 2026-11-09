@@ -78,6 +78,17 @@ check "no values on bwrap's command line" "! grep -qE -- '--setenv|--clearenv' <
 check "unrelated secrets are not forwarded" "! grep -q STRIPE_SECRET_KEY <<<\"\$env_out\""
 
 # ---------------------------------------------------------------------------
+# exec mode: arbitrary commands without an agent
+# ---------------------------------------------------------------------------
+exec_dry=$($kandor -C "$tmp/project" --dry-run exec -- /bin/echo hello 2>/dev/null)
+check "dry-run exec shows the command" "grep -q -- \"'/bin/echo' 'hello'\" <<<\"\$exec_dry\""
+check "dry-run exec has no agent binary" "! grep -q opencode <<<\"\$exec_dry\""
+$kandor -C "$tmp/project" exec -- /bin/sh -c 'test -f visible && test ! -e "$HOME/.ssh"' >/dev/null 2>&1
+check "exec sees the project but not host home" "[[ $? -eq 0 ]]"
+$kandor -C "$tmp/project" exec >/dev/null 2>&1
+check "bare exec fails" "[[ $? -ne 0 ]]"
+
+# ---------------------------------------------------------------------------
 # Filesystem boundary
 # ---------------------------------------------------------------------------
 run_shell() {

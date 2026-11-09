@@ -69,6 +69,8 @@ const template = `# kandor configuration file
 
 # [agents.opencode.env.set]
 
+# [agents.pi]  # another agent works the same way; see docs/agents.md
+
 # [sections.example]  # a reusable stack of settings, e.g. [sections.go].
 # A project opts in with its own include list in .kandor.toml; the default
 # stack, when defined, always applies.  Sections hold the same settings as

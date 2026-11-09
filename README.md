@@ -127,6 +127,8 @@ kandor --completions bash
 
 - [Configuration](docs/configuration.md) — options, the config file,
   per-project `.kandor.toml` and reusable `[sections.*]` stacks
+- [Agents](docs/agents.md) — `--agent`, built-in OpenCode/Claude support,
+  config-only agents (pi, copilot), defining your own, `exec` mode
 - [Profiles](docs/profiles.md) — isolated vs. shared OpenCode state
 - [Security model](docs/security.md) — what the sandbox isolates and what it does not
 - [Typical setups](docs/setups.md) — builds, SSH, local models, offline runs
