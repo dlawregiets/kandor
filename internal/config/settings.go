@@ -52,4 +52,7 @@ type Settings struct {
 	Seed     bool
 
 	AgentBinary string
+	// Agent is the merged [agents.<name>] section across all file layers
+	// for the agent being run: Binary is last-wins, lists concatenate.
+	Agent AgentSection
 }

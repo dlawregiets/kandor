@@ -248,3 +248,45 @@ func TestMergeAgentPathErrors(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestMergeAgentSectionAcrossLayers(t *testing.T) {
+	user := &File{
+		Agents: map[string]AgentSection{
+			"pi": {Binary: ptr("/usr/bin/pi"), Env: AgentEnv{Exclude: []string{"A"}}},
+		},
+		Sections: map[string]Section{
+			"default": {
+				Agents: map[string]AgentSection{
+					"pi": {Paths: AgentPaths{Share: []string{"~/s1"}}, Env: AgentEnv{Exclude: []string{"A", "B"}}},
+				},
+			},
+		},
+		Include: []string{"extra"},
+	}
+	user.Sections["extra"] = Section{
+		Agents: map[string]AgentSection{
+			"pi": {Binary: ptr("/opt/pi"), Paths: AgentPaths{RO: []string{"~/ro"}}},
+		},
+	}
+	s, err := Merge(user, &File{}, Overrides{}, "pi", "/h", "/cwd", env(nil))
+	if err != nil {
+		t.Fatalf("Merge error: %v", err)
+	}
+	if s.Agent.Binary == nil || *s.Agent.Binary != "/opt/pi" {
+		t.Errorf("Agent.Binary = %+v, want last-wins /opt/pi", s.Agent.Binary)
+	}
+	if len(s.Agent.Paths.Share) != 1 || len(s.Agent.Paths.RO) != 1 {
+		t.Errorf("Agent.Paths = %+v", s.Agent.Paths)
+	}
+	var got []string
+	for _, e := range s.Agent.Env.Exclude {
+		got = append(got, e)
+	}
+	if len(got) != 2 || got[0] != "A" || got[1] != "B" {
+		t.Errorf("Agent.Env.Exclude = %v", got)
+	}
+	// Other agents are untouched.
+	if len(s.Agent.Subcommands) != 0 {
+		t.Errorf("Agent.Subcommands = %v", s.Agent.Subcommands)
+	}
+}

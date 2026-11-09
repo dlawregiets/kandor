@@ -174,6 +174,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err != nil {
 		return o.fail(err)
 	}
+	// Host-state paths declared by [agents.<name>] (built-in defaults plus
+	// the merged user, section and project layers) become extra binds.
+	spec := agent.Resolve(ag.Name(), s.Agent)
+	state.Binds = append(state.Binds,
+		agent.Materialize(spec, filepath.Join(layout.Cache, ag.Name(), "paths"), home, o.warn)...)
 
 	newSession, explicit := sandbox.NewSessionDefault(s.NewSession, sandbox.TIOCSTIPath)
 	if newSession && !explicit {

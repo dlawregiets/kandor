@@ -159,3 +159,37 @@ func TestWritableMounts(t *testing.T) {
 		t.Error("an unmounted path is writable")
 	}
 }
+
+func TestMainDryRunAgentPaths(t *testing.T) {
+	requireBwrap(t)
+	home, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Setenv("HOME", home)
+	t.Setenv("KANDOR_BIN", "/usr/bin/true")
+	t.Setenv("KANDOR_HOME", t.TempDir())
+	cache, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", cache)
+	for _, d := range []string{"goshare", "goro", "gocopy"} {
+		if err := os.MkdirAll(filepath.Join(home, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	configFile(t, "[agents.opencode.paths]\nshare = [\"~/goshare\"]\nro = [\"~/goro\"]\ncopy = [\"~/gocopy\"]\nprivate = [\"~/goprivate\"]\n")
+	project, _ := filepath.EvalSymlinks(t.TempDir())
+	code, out, errs := call(t, "-C", project, "--dry-run")
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errs)
+	}
+	for _, want := range []string{
+		"--bind " + filepath.Join(home, "goshare") + " " + filepath.Join(home, "goshare"),
+		"--ro-bind " + filepath.Join(home, "goro") + " " + filepath.Join(home, "goro"),
+		"--bind " + filepath.Join(cache, "opencode", "paths", "gocopy") + " " + filepath.Join(home, "gocopy"),
+		"--bind " + filepath.Join(cache, "opencode", "paths", "goprivate") + " " + filepath.Join(home, "goprivate"),
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("dry-run is missing %q:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(errs, "is mounted read-write into the sandbox") {
+		t.Errorf("no share warning in stderr: %q", errs)
+	}
+}

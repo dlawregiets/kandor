@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 
 	"github.com/dlawregiets/kandor/internal/paths"
@@ -91,9 +92,17 @@ func Merge(user, project *File, o Overrides, agent, home, cwd string, getenv fun
 		}
 		s.Mounts = append(s.Mounts, mounts...)
 		s.Env = append(s.Env, envSpecs(a.Env.Pass, a.Env.Set)...)
-		if a.Binary != nil {
+		// An empty binary selects nothing; only a real path overrides.
+		if a.Binary != nil && *a.Binary != "" {
 			s.AgentBinary = *a.Binary
+			s.Agent.Binary = a.Binary
 		}
+		s.Agent.Subcommands = appendUnique(s.Agent.Subcommands, a.Subcommands)
+		s.Agent.Paths.Share = append(s.Agent.Paths.Share, a.Paths.Share...)
+		s.Agent.Paths.Copy = append(s.Agent.Paths.Copy, a.Paths.Copy...)
+		s.Agent.Paths.Private = append(s.Agent.Paths.Private, a.Paths.Private...)
+		s.Agent.Paths.RO = append(s.Agent.Paths.RO, a.Paths.RO...)
+		s.Agent.Env.Exclude = appendUnique(s.Agent.Env.Exclude, a.Env.Exclude)
 	}
 
 	set(&s.Network, o.Network)
@@ -185,6 +194,16 @@ func set[T any](dst *T, values ...*T) {
 			*dst = *v
 		}
 	}
+}
+
+// appendUnique appends src elements missing from dst, keeping layer order.
+func appendUnique(dst, src []string) []string {
+	for _, s := range src {
+		if !slices.Contains(dst, s) {
+			dst = append(dst, s)
+		}
+	}
+	return dst
 }
 
 func lists(m MountLists) []MountSpec {
