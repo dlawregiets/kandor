@@ -52,9 +52,9 @@ func TestParseSubcommandIsNotProject(t *testing.T) {
 }
 
 func TestParseUnknownOptionPassesThrough(t *testing.T) {
-	r := parse(t, "--agent", "plan", "--no-net")
-	if !slices.Equal(r.AgentArgs, []string{"--agent", "plan", "--no-net"}) || r.Overrides.Network != nil {
-		t.Errorf("Parse(--agent plan --no-net) = %+v", r)
+	r := parse(t, "--frobnicator", "plan", "--no-net")
+	if !slices.Equal(r.AgentArgs, []string{"--frobnicator", "plan", "--no-net"}) || r.Overrides.Network != nil {
+		t.Errorf("Parse(--frobnicator plan --no-net) = %+v", r)
 	}
 }
 
@@ -171,6 +171,34 @@ func TestUsage(t *testing.T) {
 	for _, want := range []string{"--migrate-config", "config.toml", "--init-config", "--no-protect-git", "Run OpenCode inside a bubblewrap sandbox."} {
 		if !strings.Contains(u, want) {
 			t.Errorf("Usage() is missing %q", want)
+		}
+	}
+}
+
+func TestParseAgent(t *testing.T) {
+	if r := parse(t, "--agent", "pi", "run", "x"); r.Agent != "pi" || !slices.Equal(r.AgentArgs, []string{"run", "x"}) {
+		t.Errorf("--agent: %+v", r)
+	}
+}
+
+func TestAgentArg(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--agent", "pi", "run"}, "pi"},
+		{[]string{"-C", dir, "--agent", "pi"}, "pi"},
+		{[]string{"--ro", "/x", "--agent", "pi"}, "pi"},
+		{[]string{dir, "--agent", "pi"}, "pi"},
+		{[]string{"--", "--agent", "pi"}, ""},
+		{[]string{"--unknown", "--agent", "pi"}, ""},
+		{[]string{"not-a-dir", "--agent", "pi"}, ""},
+		{[]string{"--agent"}, ""},
+		{[]string{}, ""},
+	} {
+		if got := AgentArg(c.args); got != c.want {
+			t.Errorf("AgentArg(%q) = %q, want %q", c.args, got, c.want)
 		}
 	}
 }

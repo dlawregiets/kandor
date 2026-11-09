@@ -18,6 +18,8 @@ are not exposed.
 
 Options:
   -C, --dir DIR           Project directory (default: current directory)
+      --agent NAME          Coding agent to run (default: opencode, or
+                           default_agent; KANDOR_AGENT overrides the file)
       --ro PATH           Mount PATH read-only (repeatable)
       --rw PATH           Mount PATH read-write (repeatable)
       --env NAME[=VALUE]  Pass an environment variable into the sandbox

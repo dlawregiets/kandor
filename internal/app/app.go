@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -43,23 +44,24 @@ func (o output) fail(err error) int {
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	o := output{stdout, stderr}
 	runner.MarkInheritedFDsCloseOnExec()
-	ag := agent.OpenCode
 
-	req, err := cli.Parse(args, ag.IsSubcommand)
+	// Provisional parse to find --agent, --help and --version; the agent
+	// itself is resolved from the configuration right after.
+	pre, err := cli.Parse(args, agent.ProvisionalIsSubcommand)
 	if err != nil {
 		return o.fail(err)
 	}
-	if req.Help {
+	if pre.Help {
 		fmt.Fprint(stdout, cli.Usage())
 		return 0
 	}
-	if req.Version {
+	if pre.Version {
 		fmt.Fprintf(stdout, "kandor %s\n", version)
 		return 0
 	}
 
 	loc := config.Locate(os.Getenv)
-	if req.MigrateConfig {
+	if pre.MigrateConfig {
 		dest, err := config.Migrate(loc)
 		if err != nil {
 			return o.fail(err)
@@ -70,7 +72,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	if req.InitConfig {
+	if pre.InitConfig {
 		if err := config.WriteTemplate(loc.TOML); err != nil {
 			return o.fail(err)
 		}
@@ -81,6 +83,26 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return o.fail(err)
 	}
 	file, err := config.Load(loc.TOML)
+	if err != nil {
+		return o.fail(err)
+	}
+
+	// --agent wins, then KANDOR_AGENT, then the user configuration.
+	agentName := pre.Agent
+	if agentName == "" {
+		agentName = os.Getenv("KANDOR_AGENT")
+	}
+	if agentName == "" {
+		agentName = file.DefaultAgent
+	}
+	if agentName == "" {
+		agentName = agent.OpenCode.Name()
+	}
+	known := agent.Known(file.Agents)
+	if !slices.Contains(known, agentName) {
+		return o.fail(fmt.Errorf("unknown agent %q (known: %s)", agentName, strings.Join(known, ", ")))
+	}
+	req, err := cli.Parse(args, agent.IsSubcommandFor(agentName, file.Agents[agentName]))
 	if err != nil {
 		return o.fail(err)
 	}
@@ -109,15 +131,16 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	s, err := config.Merge(file, proj, req.Overrides, ag.Name(), home, cwd, os.Getenv)
+	s, err := config.Merge(file, proj, req.Overrides, agentName, home, cwd, os.Getenv)
 	if err != nil {
 		return o.fail(err)
 	}
 	if haveProj {
-		if w := config.WideningKeys(proj, ag.Name()); len(w) > 0 {
+		if w := config.WideningKeys(proj, agentName); len(w) > 0 {
 			o.warn(fmt.Sprintf("%s widens the sandbox: %s", projPath, strings.Join(w, ", ")))
 		}
 	}
+	ag := agent.For(agentName, s.Agent)
 	if s.ProjectDir, err = validProject(s.ProjectDir, home); err != nil {
 		return o.fail(err)
 	}
@@ -164,7 +187,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// are cleaned up (deferred calls run in reverse, so the guard stops last).
 	guard := runner.NewGuard()
 	defer guard.Stop()
-	layout, cleanup, err := profile.Setup(s, host, kandorHome, tmpdir, uid)
+	layout, cleanup, err := profile.Setup(s, host, kandorHome, tmpdir, uid, profileScope(agentName))
 	if err != nil {
 		return o.fail(err)
 	}
@@ -275,6 +298,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	code := guard.Child(argv, env)
 	sandbox.Audit(mounts.Git, s.ProjectDir, o.warn)
 	return code
+}
+
+// profileScope namespaces isolated profiles per agent, except OpenCode's,
+// which keeps the historical flat layout.
+func profileScope(agentName string) string {
+	if agentName == agent.OpenCode.Name() {
+		return ""
+	}
+	return agentName
 }
 
 // writableMounts reports whether a path is an extra mount that ends up

@@ -193,3 +193,53 @@ func TestMainDryRunAgentPaths(t *testing.T) {
 		t.Errorf("no share warning in stderr: %q", errs)
 	}
 }
+
+func TestMainUnknownAgent(t *testing.T) {
+	configFile(t, "")
+	code, _, errs := call(t, "--agent", "bogus", "--dry-run")
+	if code != 1 || !strings.Contains(errs, `unknown agent "bogus" (known: opencode)`) {
+		t.Errorf("code = %d, stderr = %q", code, errs)
+	}
+}
+
+func TestMainAgentSelection(t *testing.T) {
+	user := "[agents.pi]\nbinary = \"/usr/bin/true\"\n"
+	project := t.TempDir()
+	if code, _, errs := initProjectCall(t, "", user, project, "--agent", "pi", "--init-project"); code != 0 {
+		t.Fatalf("--agent pi: code = %d, stderr = %q", code, errs)
+	} else if _, err := os.Stat(config.ProjectPath(project)); err != nil {
+		t.Fatalf("--agent pi did not write the project file: %v", err)
+	}
+	project = t.TempDir()
+	t.Setenv("KANDOR_AGENT", "pi")
+	if code, _, errs := initProjectCall(t, "", user, project, "--init-project"); code != 0 {
+		t.Fatalf("KANDOR_AGENT=pi: code = %d, stderr = %q", code, errs)
+	}
+	project = t.TempDir()
+	if code, _, errs := initProjectCall(t, "", "default_agent = \"pi\"\n"+user, project, "--init-project"); code != 0 {
+		t.Fatalf("default_agent: code = %d, stderr = %q", code, errs)
+	}
+}
+
+func TestMainDryRunGenericAgent(t *testing.T) {
+	requireBwrap(t)
+	home, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Setenv("HOME", home)
+	t.Setenv("KANDOR_BIN", "/usr/bin/true")
+	t.Setenv("KANDOR_HOME", t.TempDir())
+	cache, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", cache)
+	if err := os.MkdirAll(filepath.Join(home, "pistate"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile(t, "[agents.pi.paths]\nshare = [\"~/pistate\"]\n")
+	project, _ := filepath.EvalSymlinks(t.TempDir())
+	code, out, errs := call(t, "--agent", "pi", "-C", project, "--dry-run")
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errs)
+	}
+	want := "--bind " + filepath.Join(home, "pistate") + " " + filepath.Join(home, "pistate")
+	if !strings.Contains(out, want) {
+		t.Errorf("dry-run is missing %q:\n%s", want, out)
+	}
+}

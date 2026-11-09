@@ -24,10 +24,11 @@ type XDG struct {
 // cleanup function (safe to call more than once).
 //
 // An isolated profile lives in kandorHome/<profile> (kandorHome defaults to
-// host.Data/kandor) and persists.  Shared mode uses a temporary directory in
-// tmpdir for config, state and cache, and the host's data directory for the
-// session database; the temporary directory is removed by cleanup.
-func Setup(s config.Settings, host XDG, kandorHome, tmpdir string, uid int) (agent.Layout, func(), error) {
+// host.Data/kandor), or in kandorHome/<scope>/<profile> when scope names a
+// non-default agent, and persists.  Shared mode uses a temporary directory
+// in tmpdir for config, state and cache, and the host's data directory for
+// the session database; the temporary directory is removed by cleanup.
+func Setup(s config.Settings, host XDG, kandorHome, tmpdir string, uid int, scope string) (agent.Layout, func(), error) {
 	l := agent.Layout{
 		HostConfig: host.Config, HostData: host.Data, HostState: host.State, HostCache: host.Cache,
 		Isolated: s.Isolated, Seed: s.Seed,
@@ -36,7 +37,11 @@ func Setup(s config.Settings, host XDG, kandorHome, tmpdir string, uid int) (age
 		if kandorHome == "" {
 			kandorHome = filepath.Join(host.Data, "kandor")
 		}
-		l.ProfileRoot = filepath.Join(kandorHome, s.Profile)
+		root := kandorHome
+		if scope != "" {
+			root = filepath.Join(root, scope)
+		}
+		l.ProfileRoot = filepath.Join(root, s.Profile)
 		l.Config, l.Data = filepath.Join(l.ProfileRoot, "config"), filepath.Join(l.ProfileRoot, "data")
 		l.State, l.Cache = filepath.Join(l.ProfileRoot, "state"), filepath.Join(l.ProfileRoot, "cache")
 		for _, d := range []string{l.Config, l.Data, l.State, l.Cache} {

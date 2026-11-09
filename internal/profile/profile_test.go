@@ -25,7 +25,7 @@ func TestSetupIsolated(t *testing.T) {
 	h := host(t)
 	home := filepath.Join(t.TempDir(), "kandor")
 	s := config.Settings{Isolated: true, Profile: "work", Seed: true}
-	l, cleanup, err := Setup(s, h, home, t.TempDir(), 1000)
+	l, cleanup, err := Setup(s, h, home, t.TempDir(), 1000, "")
 	if err != nil {
 		t.Fatalf("Setup error: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestSetupIsolated(t *testing.T) {
 
 func TestSetupIsolatedDefaultHome(t *testing.T) {
 	h := host(t)
-	l, _, err := Setup(config.Settings{Isolated: true, Profile: "default"}, h, "", t.TempDir(), 1000)
+	l, _, err := Setup(config.Settings{Isolated: true, Profile: "default"}, h, "", t.TempDir(), 1000, "")
 	if err != nil || l.ProfileRoot != filepath.Join(h.Data, "kandor", "default") {
 		t.Errorf("ProfileRoot = %q, %v", l.ProfileRoot, err)
 	}
@@ -62,7 +62,7 @@ func TestSetupIsolatedDefaultHome(t *testing.T) {
 func TestSetupSharedUsesHostData(t *testing.T) {
 	h := host(t)
 	tmp := t.TempDir()
-	l, cleanup, err := Setup(config.Settings{}, h, "", tmp, 1000)
+	l, cleanup, err := Setup(config.Settings{}, h, "", tmp, 1000, "")
 	if err != nil {
 		t.Fatalf("Setup error: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestSetupRemovesStaleShared(t *testing.T) {
 	alive := staleDir(t, tmp, "kandor-shared-1000.alive", os.Getpid(), 2*time.Hour)
 	recent := staleDir(t, tmp, "kandor-shared-1000.recent", deadPID(t), time.Minute)
 	other := staleDir(t, tmp, "kandor-shared-1001.dead", deadPID(t), 2*time.Hour)
-	_, cleanup, err := Setup(config.Settings{}, host(t), "", tmp, 1000)
+	_, cleanup, err := Setup(config.Settings{}, host(t), "", tmp, 1000, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,10 +127,25 @@ func TestSetupRemovesStaleShared(t *testing.T) {
 }
 
 func TestCleanupIdempotent(t *testing.T) {
-	_, cleanup, err := Setup(config.Settings{}, host(t), "", t.TempDir(), 1000)
+	_, cleanup, err := Setup(config.Settings{}, host(t), "", t.TempDir(), 1000, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	cleanup()
 	cleanup()
+}
+
+func TestSetupIsolatedScoped(t *testing.T) {
+	h := host(t)
+	home := filepath.Join(t.TempDir(), "kandor")
+	s := config.Settings{Isolated: true, Profile: "work", Seed: true}
+	l, cleanup, err := Setup(s, h, home, t.TempDir(), 1000, "pi")
+	if err != nil {
+		t.Fatalf("Setup error: %v", err)
+	}
+	defer cleanup()
+	root := filepath.Join(home, "pi", "work")
+	if l.ProfileRoot != root || l.Config != root+"/config" {
+		t.Errorf("scoped layout = %+v, want root %s", l, root)
+	}
 }

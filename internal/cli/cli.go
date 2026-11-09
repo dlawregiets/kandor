@@ -19,6 +19,9 @@ type Request struct {
 	InitConfig, MigrateConfig bool
 	InitProject               bool
 	Shell, DryRun, Verbose    bool
+	// Agent selects the coding agent; "" resolves from KANDOR_AGENT,
+	// the user configuration, then the "opencode" default.
+	Agent string
 }
 
 type option struct {
@@ -79,6 +82,7 @@ func options(r *Request) map[string]option {
 		"--shell":           {"", "", func(r *Request, _ string) { r.Shell = true }},
 		"--init-config":     {"", "", func(r *Request, _ string) { r.InitConfig = true }},
 		"--init-project":    {"", "", func(r *Request, _ string) { r.InitProject = true }},
+		"--agent":           {"", "--agent requires a name", func(r *Request, v string) { r.Agent = v }},
 		"--migrate-config":  {"", "", func(r *Request, _ string) { r.MigrateConfig = true }},
 		"--dry-run":         dryRun,
 		"--print-command":   dryRun,
@@ -98,6 +102,38 @@ func OptionKeys() map[string]string {
 		keys[name] = opt.key
 	}
 	return keys
+}
+
+// AgentArg returns the --agent selection without full parsing, so the agent
+// (and its subcommands) is known before the command line is parsed.  The
+// scan mirrors Parse: it stops at "--", at unknown options and at the first
+// non-directory positional, and it skips the values of known options.
+func AgentArg(args []string) string {
+	var r Request
+	opts := options(&r)
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			break
+		}
+		if arg == "--agent" {
+			if i+1 < len(args) {
+				return args[i+1]
+			}
+			return ""
+		}
+		opt, known := opts[arg]
+		if !known {
+			if !strings.HasPrefix(arg, "-") && isDir(arg) {
+				continue
+			}
+			break
+		}
+		if opt.missing != "" {
+			i++
+		}
+	}
+	return ""
 }
 
 // Parse parses args.  Parsing stops at "--" (dropped), at the first option

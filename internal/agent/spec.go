@@ -25,17 +25,23 @@ type Spec struct {
 	EnvExclude  []string
 }
 
+// builtinSpecs are the agents kandor knows without configuration.
+var builtinSpecs = []Spec{
+	{
+		Name:        OpenCode.Name(),
+		Subcommands: slices.Clone(opencodeSubcommands),
+		EnvExclude:  slices.Clone(opencodeExcluded),
+	},
+}
+
 // builtin returns the built-in defaults for a known agent.  OpenCode keeps
 // its bespoke behavior in its Agent implementation; the spec only carries
 // the lists other agents share.
 func builtin(name string) (Spec, bool) {
-	switch name {
-	case OpenCode.Name():
-		return Spec{
-			Name:        OpenCode.Name(),
-			Subcommands: slices.Clone(opencodeSubcommands),
-			EnvExclude:  slices.Clone(opencodeExcluded),
-		}, true
+	for _, s := range builtinSpecs {
+		if s.Name == name {
+			return s, true
+		}
 	}
 	return Spec{}, false
 }
