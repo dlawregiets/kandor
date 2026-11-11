@@ -202,6 +202,94 @@ func TestMainAgentSelection(t *testing.T) {
 	}
 }
 
+func TestResolveAgent(t *testing.T) {
+	user := &config.File{DefaultAgent: "pi"}
+	proj := &config.File{DefaultAgent: "copilot"}
+	if got := resolveAgent("claude", proj, user); got != "claude" {
+		t.Errorf("--agent selection = %q", got)
+	}
+	if got := resolveAgent("", proj, user); got != "copilot" {
+		t.Errorf("project selection = %q", got)
+	}
+	t.Setenv("KANDOR_AGENT", "pi")
+	if got := resolveAgent("", proj, user); got != "pi" {
+		t.Errorf("KANDOR_AGENT selection = %q", got)
+	}
+	t.Setenv("KANDOR_AGENT", "")
+	if got := resolveAgent("", &config.File{}, user); got != "pi" {
+		t.Errorf("user selection = %q", got)
+	}
+	if got := resolveAgent("", nil, &config.File{}); got != "opencode" {
+		t.Errorf("default selection = %q", got)
+	}
+}
+
+func TestMainProjectDefaultAgent(t *testing.T) {
+	requireBwrap(t)
+	home, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Setenv("HOME", home)
+	t.Setenv("KANDOR_BIN", "/usr/bin/true")
+	t.Setenv("KANDOR_HOME", t.TempDir())
+	cache, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", cache)
+	if err := os.MkdirAll(filepath.Join(home, "pistate"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile(t, "[agents.pi.paths]\nshare = [\"~/pistate\"]\n")
+	project, _ := filepath.EvalSymlinks(t.TempDir())
+	if err := os.WriteFile(config.ProjectPath(project), []byte("default_agent = \"pi\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs := call(t, "-C", project, "--dry-run")
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errs)
+	}
+	want := "--bind " + filepath.Join(home, "pistate") + " " + filepath.Join(home, "pistate")
+	if !strings.Contains(out, want) {
+		t.Errorf("project default_agent did not select pi; missing %q in:\n%s", want, out)
+	}
+	if !strings.Contains(errs, `using agent "pi" from `+config.ProjectPath(project)) {
+		t.Errorf("no project agent notice in stderr: %q", errs)
+	}
+}
+
+func TestMainProjectDefinesAndSelectsAgent(t *testing.T) {
+	requireBwrap(t)
+	home, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Setenv("HOME", home)
+	t.Setenv("KANDOR_BIN", "/usr/bin/true")
+	t.Setenv("KANDOR_HOME", t.TempDir())
+	cache, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", cache)
+	if err := os.MkdirAll(filepath.Join(home, "aiderstate"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile(t, "")
+	project, _ := filepath.EvalSymlinks(t.TempDir())
+	cfg := `default_agent = "aider"
+
+[agents.aider]
+binary = "/usr/bin/true"
+
+[agents.aider.paths]
+share = ["~/aiderstate"]
+`
+	if err := os.WriteFile(config.ProjectPath(project), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs := call(t, "-C", project, "--dry-run")
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errs)
+	}
+	want := "--bind " + filepath.Join(home, "aiderstate") + " " + filepath.Join(home, "aiderstate")
+	if !strings.Contains(out, want) {
+		t.Errorf("project-defined agent not used; missing %q in:\n%s", want, out)
+	}
+	if !strings.Contains(errs, "agents.aider.binary") {
+		t.Errorf("project-defined agent binary not reported: %q", errs)
+	}
+}
+
 func TestMainDryRunGenericAgent(t *testing.T) {
 	requireBwrap(t)
 	home, _ := filepath.EvalSymlinks(t.TempDir())

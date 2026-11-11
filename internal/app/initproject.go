@@ -19,6 +19,8 @@ const initProjectTemplate = `# Project configuration for kandor. It layers proje
 # top of the user configuration; reusable "sections" may only be defined in
 # the user file. See docs/configuration.md.
 
+# default_agent = "opencode"  # override the user configuration's agent here
+
 include = [%s]
 `
 

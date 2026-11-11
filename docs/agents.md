@@ -1,9 +1,16 @@
 # Agents
 
 `kandor` runs one coding agent per invocation, selected by `--agent NAME`,
-then `KANDOR_AGENT`, then the user file's `default_agent`, then `opencode`.
-Unknown names are rejected with the list of known agents (built-ins plus
-every `[agents.<name>]` in the user file).
+then `KANDOR_AGENT`, then the project file's `default_agent`, then the user
+file's `default_agent`, then `opencode`. Unknown names are rejected with the
+list of known agents (built-ins plus every `[agents.<name>]` in the user or
+project file).
+
+A project's `.kandor.toml` can switch the agent for that project only;
+projects that do not set `default_agent` keep the user's choice. The switch
+is announced with a `kandor: using agent ...` line, and a project that
+defines its own `[agents.<name>]` section prints the usual widening warning
+for settings such as `binary`.
 
 | Agent | Probed version | State by default |
 | --- | --- | --- |
@@ -12,8 +19,9 @@ every `[agents.<name>]` in the user file).
 | `pi` | pi 1.4.0 | `~/.pi` copied into the profile |
 | `copilot` | Copilot CLI 1.0.101 | `~/.copilot` copied into the profile |
 
-Every built-in is just defaults: `[agents.<name>]` in the user file overrides
-the binary, adds paths, or replaces the environment exclusions.
+Every built-in is just defaults: `[agents.<name>]` in the user or project
+file overrides the binary, adds paths, or replaces the environment
+exclusions.
 
 ## OpenCode
 
@@ -108,8 +116,9 @@ exclude = ["AIDER_"]                 # never forwarded
 
 Path rules are enforced like mounts: absolute or `~` paths only, no broad
 host paths, and one path in two modes of the same layer is an error. `share`
-warns on every run. A `default_agent` in a project file is an error; agent
-keys in a project file still print the widening warning.
+warns on every run. A project file may set `default_agent` and define its own
+`[agents.<name>]` sections to try a harness in one repository; those settings
+apply only there and agent keys still print the widening warning.
 
 ## `kandor exec`
 

@@ -19,7 +19,8 @@ are not exposed.
 Options:
   -C, --dir DIR           Project directory (default: current directory)
       --agent NAME          Coding agent to run (default: opencode, or
-                           default_agent; KANDOR_AGENT overrides the file)
+                           default_agent from the project or user file;
+                           KANDOR_AGENT overrides both)
       exec [--] CMD...      Run CMD in the sandbox instead of an agent;
                            kandor options come before exec
       --ro PATH           Mount PATH read-only (repeatable)

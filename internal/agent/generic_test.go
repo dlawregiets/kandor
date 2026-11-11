@@ -65,6 +65,10 @@ func TestKnownAgents(t *testing.T) {
 	if !slices.Equal(known, []string{"claude", "copilot", "opencode", "pi"}) {
 		t.Errorf("Known = %v", known)
 	}
+	known = Known(map[string]config.AgentSection{"pi": {}}, map[string]config.AgentSection{"aider": {}})
+	if !slices.Equal(known, []string{"aider", "claude", "copilot", "opencode", "pi"}) {
+		t.Errorf("Known with project agents = %v", known)
+	}
 }
 
 func TestProvisionalIsSubcommand(t *testing.T) {

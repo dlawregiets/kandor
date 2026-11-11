@@ -15,8 +15,8 @@ type File struct {
 	Profile     ProfileSection          `toml:"profile,omitempty"`
 	Agents      map[string]AgentSection `toml:"agents,omitempty"`
 	// DefaultAgent selects the agent to run: --agent and KANDOR_AGENT win
-	// over it, and it falls back to "opencode".  It is user-file only; a
-	// project file must not switch the agent out from under you.
+	// over it, a project file overrides the user file for that project, and
+	// it falls back to "opencode".
 	DefaultAgent string `toml:"default_agent,omitempty"`
 	// Sections is a library of named, reusable stacks of settings (such as
 	// "go" or "python").  They apply only when included: the "default"

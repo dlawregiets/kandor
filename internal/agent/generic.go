@@ -74,16 +74,18 @@ func Subcommands(name string, cfg config.AgentSection) []string {
 	return appendUnique(slices.Clone(s.Subcommands), cfg.Subcommands)
 }
 
-// Known lists the selectable agents: built-ins plus user-defined sections,
-// sorted.
-func Known(user map[string]config.AgentSection) []string {
+// Known lists the selectable agents: built-ins plus every configured
+// [agents.<name>] section in the given files, sorted.
+func Known(files ...map[string]config.AgentSection) []string {
 	var seen []string
 	for _, s := range builtinSpecs {
 		seen = append(seen, s.Name)
 	}
-	for name := range user {
-		if !slices.Contains(seen, name) {
-			seen = append(seen, name)
+	for _, sections := range files {
+		for name := range sections {
+			if !slices.Contains(seen, name) {
+				seen = append(seen, name)
+			}
 		}
 	}
 	slices.Sort(seen)

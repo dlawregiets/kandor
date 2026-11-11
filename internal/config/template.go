@@ -17,7 +17,8 @@ const template = `# kandor configuration file
 
 # include = []  # named stacks from [sections.*] to always apply, e.g. ["go"]
 
-# default_agent = "opencode"  # the agent to run; --agent and KANDOR_AGENT win
+# default_agent = "opencode"  # the agent to run; --agent and KANDOR_AGENT win,
+#                             # and a project .kandor.toml overrides it there
 
 # [mounts]
 # read_only  = []  # host paths mounted read-only, e.g. ["~/.config/gcloud"]

@@ -73,27 +73,51 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return o.fail(err)
 	}
 
-	// --agent wins, then KANDOR_AGENT, then the user configuration.
-
-	// --agent wins, then KANDOR_AGENT, then the user configuration.
-	agentName := pre.Agent
-	if agentName == "" {
-		agentName = os.Getenv("KANDOR_AGENT")
-	}
-	if agentName == "" {
-		agentName = file.DefaultAgent
-	}
-	if agentName == "" {
-		agentName = agent.OpenCode.Name()
-	}
-	known := agent.Known(file.Agents)
-	if !slices.Contains(known, agentName) {
-		return o.fail(fmt.Errorf("unknown agent %q (known: %s)", agentName, strings.Join(known, ", ")))
-	}
-	req, err := cli.Parse(args, agent.IsSubcommandFor(agentName, file.Agents[agentName]))
+	home, err := validHome(os.Getenv("HOME"))
 	if err != nil {
 		return o.fail(err)
 	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return o.fail(err)
+	}
+
+	// The agent may come from the project file, while the agent's subcommands
+	// decide whether a positional argument is a project directory.  Resolve
+	// the pair together until the project directory stops changing.
+	projDir := config.ResolveProjectDir(pre.Overrides, cwd)
+	var (
+		proj      *config.File
+		haveProj  bool
+		agentName string
+		req       cli.Request
+	)
+	stable := false
+	for range 4 {
+		if proj, haveProj, err = config.LoadProject(projDir); err != nil {
+			return o.fail(err)
+		}
+		agentName = resolveAgent(pre.Agent, proj, file)
+		known := agent.Known(file.Agents, proj.Agents)
+		if !slices.Contains(known, agentName) {
+			return o.fail(fmt.Errorf("unknown agent %q (known: %s)", agentName, strings.Join(known, ", ")))
+		}
+		req, err = cli.Parse(args, agent.IsSubcommandFor(agentName, parseAgent(agentName, file, proj)))
+		if err != nil {
+			return o.fail(err)
+		}
+		next := config.ResolveProjectDir(req.Overrides, cwd)
+		if next == projDir {
+			stable = true
+			break
+		}
+		projDir = next
+	}
+	if !stable {
+		return o.fail(errors.New("cannot resolve the project directory consistently; use -C or --agent to disambiguate"))
+	}
+	projPath := config.ProjectPath(projDir)
+
 	if req.Exec {
 		if req.Shell {
 			return o.fail(errors.New("--shell and exec are mutually exclusive"))
@@ -105,21 +129,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return o.fail(errors.New("exec does not take --isolated, --profile or --no-seed"))
 		}
 	}
-
-	home, err := validHome(os.Getenv("HOME"))
-	if err != nil {
-		return o.fail(err)
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return o.fail(err)
-	}
-	projDir := config.ResolveProjectDir(req.Overrides, cwd)
-	projPath := config.ProjectPath(projDir)
-	proj, haveProj, err := config.LoadProject(projDir)
-	if err != nil {
-		return o.fail(err)
-	}
 	if req.InitProject {
 		dir, err := validProject(projDir, home)
 		if err != nil {
@@ -129,6 +138,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return o.fail(err)
 		}
 		return 0
+	}
+	if !req.Exec && haveProj && proj.DefaultAgent != "" && pre.Agent == "" && os.Getenv("KANDOR_AGENT") == "" {
+		o.log(fmt.Sprintf("using agent %q from %s", agentName, projPath))
 	}
 	mergeAgent := agentName
 	if req.Exec {
@@ -388,6 +400,36 @@ func validHome(home string) (string, error) {
 		return "", errors.New("refusing to run with HOME=/")
 	}
 	return resolved, nil
+}
+
+// resolveAgent applies the agent selection order: --agent, KANDOR_AGENT, the
+// project file's default_agent, the user file's default_agent, then OpenCode.
+func resolveAgent(cliAgent string, proj, user *config.File) string {
+	if cliAgent != "" {
+		return cliAgent
+	}
+	if v := os.Getenv("KANDOR_AGENT"); v != "" {
+		return v
+	}
+	if proj != nil && proj.DefaultAgent != "" {
+		return proj.DefaultAgent
+	}
+	if user.DefaultAgent != "" {
+		return user.DefaultAgent
+	}
+	return agent.OpenCode.Name()
+}
+
+// parseAgent combines the subcommands declared for name in the user and
+// project files, so the parser knows them before the layers merge.
+func parseAgent(name string, user, proj *config.File) config.AgentSection {
+	var cfg config.AgentSection
+	for _, f := range []*config.File{user, proj} {
+		if f != nil {
+			cfg.Subcommands = append(cfg.Subcommands, f.Agents[name].Subcommands...)
+		}
+	}
+	return cfg
 }
 
 func validProject(dir, home string) (string, error) {

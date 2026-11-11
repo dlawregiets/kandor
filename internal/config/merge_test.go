@@ -242,10 +242,14 @@ func TestMergeAgentPathErrors(t *testing.T) {
 		!strings.Contains(err.Error(), "agents.pi: empty path in share") {
 		t.Errorf("err = %v", err)
 	}
+}
+
+// A project file may select the agent; the caller applies that before
+// merging, so Merge itself must not reject it.
+func TestMergeProjectDefaultAgent(t *testing.T) {
 	proj := &File{DefaultAgent: "pi"}
-	if _, err := Merge(&File{}, proj, Overrides{}, "pi", "/h", "/cwd", env(nil)); err == nil ||
-		!strings.Contains(err.Error(), "default_agent may only be set in the user configuration file") {
-		t.Errorf("err = %v", err)
+	if _, err := Merge(&File{}, proj, Overrides{}, "pi", "/h", "/cwd", env(nil)); err != nil {
+		t.Errorf("project default_agent rejected: %v", err)
 	}
 }
 

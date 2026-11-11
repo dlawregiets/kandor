@@ -35,9 +35,6 @@ func Merge(user, project *File, o Overrides, agent, home, cwd string, getenv fun
 	if len(project.Sections) > 0 {
 		return Settings{}, fmt.Errorf("sections must be defined in the user configuration file, not the project one")
 	}
-	if project.DefaultAgent != "" {
-		return Settings{}, fmt.Errorf("default_agent may only be set in the user configuration file, not the project one")
-	}
 	layers, err := resolveLayers(user, project, agent)
 	if err != nil {
 		return Settings{}, err

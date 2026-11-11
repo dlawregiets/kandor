@@ -77,9 +77,9 @@ binary = "/opt/opencode/bin/opencode"   # KANDOR_BIN overrides it
 read_only = []
 ```
 
-Paths may start with `~` or `$HOME`. Unknown sections and keys, values of the
-wrong type and agents other than `opencode` are errors, so a typo cannot
-silently change the sandbox.
+Paths may start with `~` or `$HOME`. Unknown sections, keys and agent names,
+and values of the wrong type, are errors, so a typo cannot silently change
+the sandbox.
 
 ### Per-project configuration
 
@@ -93,7 +93,22 @@ include = ["go"]
 
 [env.set]
 GOTOOLCHAIN = "local"
+
+# Try a different harness in this project only.
+default_agent = "aider"
+
+[agents.aider]
+binary = "aider"
+
+[agents.aider.paths]
+copy = ["~/.aider"]
 ```
+
+A project `default_agent` overrides the user file's choice for that project
+only; other projects keep the user default (or `opencode`). The project can
+also define a new `[agents.<name>]` section, so experimenting with a harness
+does not require changing the user configuration. *kandor* prints
+`kandor: using agent "..." from ...` when the project selects the agent.
 
 The user file may define any number of named stacks under `[sections.*]`,
 with the same settings as the top level. The `[sections.default]` stack, when
