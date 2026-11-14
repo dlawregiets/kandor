@@ -50,7 +50,7 @@ Options `kandor` does not know, such as OpenCode's `--continue` or
 - Linux
 - `bubblewrap` (`bwrap`) 0.5+, 0.9+ recommended
 - `git`, optional (used to find and protect the project's repository)
-- Go 1.27+ to build from source
+- Go 1.27+ to build or `go install` from source
 - Working unprivileged user namespaces, or a setuid `bwrap` installation
 - `opencode` in `PATH` (or set `KANDOR_BIN`)
 
@@ -63,6 +63,30 @@ bwrap --ro-bind / / --unshare-user-try -- /bin/true && echo ok
 If that fails, see [Troubleshooting](docs/troubleshooting.md).
 
 ## Install
+
+### With `go install`
+
+With Go 1.27 or newer you can install from the module proxy without cloning:
+
+```sh
+go install github.com/dlawregiets/kandor/cmd/kandor@latest
+```
+
+`@latest` picks the newest tagged release, or the latest commit on the default
+branch if no release tag is newer.
+
+The binary is written to `$(go env GOPATH)/bin` (usually `~/go/bin`), so make
+sure that directory is in your `PATH`:
+
+```sh
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
+A `go install` build is not stamped with a release version, so `kandor
+--version` reports `dev`; use `make install` or a release tarball when the
+version string matters.
+
+### From a clone
 
 Build and install it for the current user with:
 
@@ -138,7 +162,8 @@ kandor --completions bash
 ## Uninstall
 
 ```sh
-rm ~/.local/bin/kandor
-rm -rf ~/.local/share/kandor   # isolated profiles
-rm -rf ~/.config/kandor        # optional config file
+make uninstall                               # if installed with make install
+rm "$(go env GOPATH)/bin/kandor"             # if installed with go install
+rm -rf ~/.local/share/kandor                 # isolated profiles
+rm -rf ~/.config/kandor                      # optional config file
 ```
