@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -141,14 +142,27 @@ func TestWritableMounts(t *testing.T) {
 	}
 }
 
+// bindSource returns the source of the bind that mounts dest.
+func bindSource(out, dest string) (string, bool) {
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		for i := 0; i+2 < len(fields); i++ {
+			if (fields[i] == "--bind" || fields[i] == "--ro-bind") && fields[i+2] == dest {
+				return fields[i+1], true
+			}
+		}
+	}
+	return "", false
+}
+
 func TestMainDryRunAgentPaths(t *testing.T) {
 	requireBwrap(t)
 	home, _ := filepath.EvalSymlinks(t.TempDir())
 	t.Setenv("HOME", home)
 	t.Setenv("KANDOR_BIN", "/usr/bin/true")
 	t.Setenv("KANDOR_HOME", t.TempDir())
-	cache, _ := filepath.EvalSymlinks(t.TempDir())
-	t.Setenv("XDG_CACHE_HOME", cache)
+	tmp, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Setenv("TMPDIR", tmp)
 	for _, d := range []string{"goshare", "goro", "gocopy"} {
 		if err := os.MkdirAll(filepath.Join(home, d), 0o755); err != nil {
 			t.Fatal(err)
@@ -163,11 +177,25 @@ func TestMainDryRunAgentPaths(t *testing.T) {
 	for _, want := range []string{
 		"--bind " + filepath.Join(home, "goshare") + " " + filepath.Join(home, "goshare"),
 		"--ro-bind " + filepath.Join(home, "goro") + " " + filepath.Join(home, "goro"),
-		"--bind " + filepath.Join(cache, "opencode", "paths", "gocopy") + " " + filepath.Join(home, "gocopy"),
-		"--bind " + filepath.Join(cache, "opencode", "paths", "goprivate") + " " + filepath.Join(home, "goprivate"),
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("dry-run is missing %q:\n%s", want, out)
+		}
+	}
+	// Copy and private state live in the temporary shared profile, not in
+	// the host's cache directory.
+	for _, name := range []string{"gocopy", "goprivate"} {
+		dest := filepath.Join(home, name)
+		src, ok := bindSource(out, dest)
+		if !ok {
+			t.Errorf("dry-run has no bind for %s:\n%s", dest, out)
+			continue
+		}
+		if !strings.HasPrefix(src, tmp+string(filepath.Separator)) {
+			t.Errorf("bind for %s uses %s, want a path under TMPDIR %s", dest, src, tmp)
+		}
+		if want := filepath.Join("cache", "opencode", "paths", name); !strings.HasSuffix(src, want) {
+			t.Errorf("bind for %s uses %s, want a path ending in %s", dest, src, want)
 		}
 	}
 	if !strings.Contains(errs, "is mounted read-write into the sandbox") {
@@ -338,18 +366,29 @@ func TestMainDryRunExec(t *testing.T) {
 	t.Setenv("KANDOR_BIN", "/usr/bin/true")
 	t.Setenv("KANDOR_HOME", t.TempDir())
 	project, _ := filepath.EvalSymlinks(t.TempDir())
+	bin, _ := filepath.EvalSymlinks("/usr/bin/true")
 	code, out, errs := call(t, "-C", project, "--dry-run", "exec", "--", "/usr/bin/true", "hello")
 	if code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, errs)
 	}
 	for _, want := range []string{
-		"--bind " + project + " " + project, "'/usr/bin/true' 'hello'",
+		"--bind " + project + " " + project, "-- " + bin + " hello",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("dry-run is missing %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "opencode") {
-		t.Errorf("exec run mentions opencode:\n%s", out)
+	// Only look at the command after bwrap's "--" separator: the forwarded
+	// environment may legitimately mention opencode (for example in PATH).
+	fields := strings.Fields(out)
+	sep := slices.Index(fields, "--")
+	if sep < 0 {
+		t.Fatalf("dry-run has no command separator:\n%s", out)
+	}
+	for _, f := range fields[sep+1:] {
+		if strings.Contains(f, "opencode") {
+			t.Errorf("exec run mentions opencode:\n%s", out)
+			break
+		}
 	}
 }

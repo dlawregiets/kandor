@@ -42,8 +42,8 @@ kandor --init-config
 
 `kandor` consumes its own options (`-C`, `--profile`, `--env`, ...) before
 OpenCode sees them. Pass flags that collide with kandor options after `--`.
-Options `kandor` does not know, such as OpenCode's `--agent` or
-`--continue`, are passed through unchanged.
+Options `kandor` does not know, such as OpenCode's `--continue` or
+`--model`, are passed through unchanged.
 
 ## Requirements
 

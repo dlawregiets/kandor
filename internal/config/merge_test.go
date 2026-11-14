@@ -283,9 +283,7 @@ func TestMergeAgentSectionAcrossLayers(t *testing.T) {
 		t.Errorf("Agent.Paths = %+v", s.Agent.Paths)
 	}
 	var got []string
-	for _, e := range s.Agent.Env.Exclude {
-		got = append(got, e)
-	}
+	got = append(got, s.Agent.Env.Exclude...)
 	if len(got) != 2 || got[0] != "A" || got[1] != "B" {
 		t.Errorf("Agent.Env.Exclude = %v", got)
 	}

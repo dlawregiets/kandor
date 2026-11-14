@@ -52,6 +52,7 @@ func Preflight(f sandbox.Features) error {
 }
 
 func preflightError() error {
+	//lint:ignore ST1005 a multi-line, user-facing diagnostic reads better with punctuation
 	return errors.New(`bubblewrap cannot create a user namespace.
 
 This is usually one of:

@@ -13,6 +13,11 @@ kandor=$root/bin/kandor
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/kandor-test.XXXXXX")
 trap 'rm -rf -- "$tmp"' EXIT
 
+# Run from the temporary directory so a .kandor.toml in the caller's
+# working directory (including this repository's own) is not picked up by
+# the checks that do not pass -C.
+cd -- "$tmp" || exit 1
+
 export KANDOR_HOME=$tmp/profiles
 export KANDOR_CONFIG=$tmp/config
 
@@ -80,9 +85,14 @@ check "unrelated secrets are not forwarded" "! grep -q STRIPE_SECRET_KEY <<<\"\$
 # ---------------------------------------------------------------------------
 # exec mode: arbitrary commands without an agent
 # ---------------------------------------------------------------------------
+# exec resolves symlinks, so compare against the real binary rather than the
+# path that was passed (distributions may link /bin/echo to another target).
+echo_bin=$(readlink -f /bin/echo)
 exec_dry=$($kandor -C "$tmp/project" --dry-run exec -- /bin/echo hello 2>/dev/null)
-check "dry-run exec shows the command" "grep -q -- \"'/bin/echo' 'hello'\" <<<\"\$exec_dry\""
-check "dry-run exec has no agent binary" "! grep -q opencode <<<\"\$exec_dry\""
+check "dry-run exec shows the command" \
+  "grep -qF -- \"$echo_bin hello\" <<<\"\$exec_dry\""
+check "dry-run exec has no agent binary" \
+  "! grep -qE -- '(^|[[:space:]])(opencode|opencode\.exe)([[:space:]]|$)' <<<\"\$exec_dry\""
 $kandor -C "$tmp/project" exec -- /bin/sh -c 'test -f visible && test ! -e "$HOME/.ssh"' >/dev/null 2>&1
 check "exec sees the project but not host home" "[[ $? -eq 0 ]]"
 $kandor -C "$tmp/project" exec >/dev/null 2>&1
@@ -182,14 +192,14 @@ check "isolated profile does not use the host data directory" \
 # ---------------------------------------------------------------------------
 # OpenCode only
 # ---------------------------------------------------------------------------
-printf 'agent omp\n' > "$tmp/omp-config"
-out=$(KANDOR_CONFIG=$tmp/omp-config $kandor --dry-run 2>&1)
-check "an old-format config file is reported" \
-  "grep -q 'old configuration format' <<<\"\$out\""
+printf 'agent omp\n' > "$tmp/bad-config"
+out=$(KANDOR_CONFIG=$tmp/bad-config $kandor --dry-run 2>&1)
+check "a malformed config file is reported" \
+  "grep -q 'bad-config: line 1' <<<\"\$out\""
 
-dry_agent=$($kandor -C "$tmp/project" --dry-run --agent plan 2>/dev/null)
-check "--agent is passed to OpenCode" \
-  "grep -q -- '--standalone --agent plan' <<<\"\$dry_agent\""
+dry_agent=$($kandor -C "$tmp/project" --dry-run --continue 2>/dev/null)
+check "unknown options are passed to the agent" \
+  "grep -q -- '--standalone --continue' <<<\"\$dry_agent\""
 
 # ---------------------------------------------------------------------------
 # Process handling and unusual inputs
