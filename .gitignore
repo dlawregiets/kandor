@@ -16,3 +16,6 @@ Thumbs.db
 
 # Local project sandbox config (personal stacks and mounts)
 /.kandor.toml
+
+.projectmem
+.codegraph
