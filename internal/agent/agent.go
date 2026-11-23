@@ -62,11 +62,3 @@ type Agent interface {
 	// Command builds the agent's command line, or refuses it.
 	Command(bin string, args []string) ([]string, error)
 }
-
-// Lookup returns the agent with the given name.
-func Lookup(name string) (Agent, bool) {
-	if name == OpenCode.Name() {
-		return OpenCode, true
-	}
-	return nil, false
-}

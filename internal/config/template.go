@@ -46,13 +46,13 @@ const template = `# kandor configuration file
 # protect      = true  # keep .git/hooks and .git/config read-only
 
 # [profile]
-# isolated = false      # true: a sandbox-only profile instead of the host's OpenCode data
+# isolated = false      # true: a sandbox-only profile instead of shared host state
 # name     = "default"  # isolated profile name; setting it implies isolated = true
 # seed     = true       # copy the host OpenCode config into a new isolated profile
 
-# [agents.opencode]
-# binary = ""  # path to opencode; empty searches PATH (KANDOR_BIN overrides it)
-# subcommands = []  # extra subcommands, for agents defined here
+# [agents.opencode]  # per-agent settings; built in: opencode, claude, pi, copilot
+# binary = ""  # path to the agent binary; empty searches PATH (KANDOR_BIN overrides it)
+# subcommands = []  # extra subcommands, so a directory named like one is not the project
 
 # [agents.opencode.paths]  # host state for the agent, in four modes
 # share = []    # mounted read-write (warned)
@@ -71,7 +71,7 @@ const template = `# kandor configuration file
 
 # [agents.opencode.env.set]
 
-# [agents.pi]  # another agent works the same way; see docs/agents.md
+# [agents.pi]  # override a built-in agent's paths or env here; see docs/agents.md
 
 # [sections.example]  # a reusable stack of settings, e.g. [sections.go].
 # A project opts in with its own include list in .kandor.toml; the default

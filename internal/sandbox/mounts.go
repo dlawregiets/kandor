@@ -20,7 +20,9 @@ type Input struct {
 	AgentBinds []agent.Bind
 	AgentMasks []agent.Mask
 	// Binary is the resolved agent (or debug shell) executable.
-	Binary    string
+	Binary string
+	// AgentName names the running agent, for its own tool directory.
+	AgentName string
 	XDGConfig string
 	Getenv    func(string) string
 	Warn      func(string)
@@ -130,7 +132,11 @@ func BuildMounts(p *Plan, in Input) (Result, error) {
 	if isDir(filepath.Join(home, ".bun")) {
 		p.RO(filepath.Join(home, ".bun"), filepath.Join(home, ".bun"))
 	}
-	for _, d := range []string{".local/bin", "bin", ".opencode/bin", "go/bin", ".cargo/bin"} {
+	toolDirs := []string{".local/bin", "bin", "go/bin", ".cargo/bin"}
+	if in.AgentName != "" {
+		toolDirs = append(toolDirs, "."+in.AgentName+"/bin")
+	}
+	for _, d := range toolDirs {
 		d = filepath.Join(home, d)
 		if isDir(d) {
 			p.RO(d, d)

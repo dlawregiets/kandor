@@ -164,7 +164,7 @@ func TestOptionKeysAreClassified(t *testing.T) {
 
 func TestUsage(t *testing.T) {
 	u := Usage()
-	for _, want := range []string{"config.toml", "--init-config", "--init-project", "--no-protect-git", "Run OpenCode inside a bubblewrap sandbox."} {
+	for _, want := range []string{"config.toml", "--init-config", "--init-project", "--no-protect-git", "Run a coding agent inside a bubblewrap sandbox."} {
 		if !strings.Contains(u, want) {
 			t.Errorf("Usage() is missing %q", want)
 		}

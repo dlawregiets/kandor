@@ -4,34 +4,48 @@
 > This is a vibe coded sandbox security tool and not meant for production use.
 > This is just a learning experience.
 
-Run [OpenCode](https://opencode.ai) inside a
+Run a coding agent ([OpenCode](https://opencode.ai), Claude Code, pi,
+Copilot, or one you define) inside a
 [bubblewrap](https://github.com/containers/bubblewrap) sandbox on Linux.
 
 `kandor` is named after the Bottle City of Kandor: a whole environment sealed
-inside a container. It is a small Go program that runs `bwrap`. It gives
-OpenCode (and everything it spawns: shells, language servers, MCP servers,
+inside a container. It is a small Go program that runs `bwrap`. It gives the
+agent (and everything it spawns: shells, language servers, MCP servers,
 plugins, build tools) a private view of the host:
 
 - `/` is mounted read-only.
 - Your home directory is replaced by an empty tmpfs. Only the project and
-  OpenCode's own state directories are visible.
+  the agent's own state directories are visible.
 - `/tmp`, `/var/tmp`, `/run/user/$UID`, `/mnt`, `/media`, `/srv` and `/run` are
   private. Host runtime sockets (DBus, keyring, journal, SSH agent) are hidden.
 - The process gets its own user, PID, IPC, UTS and cgroup namespaces.
 - Nested user namespaces are disabled when the kernel supports it.
-- OpenCode is run with `--standalone` whenever the command uses a server, so
-  it cannot attach to a background OpenCode service running outside the
-  sandbox. The host's service credentials are never mounted; each profile
-  writes its own `service.json` with a private port.
+- OpenCode (the default agent) is run with `--standalone` whenever the
+  command uses a server, so it cannot attach to a background OpenCode
+  service running outside the sandbox. The host's service credentials are
+  never mounted; each profile writes its own `service.json` with a private
+  port.
 
-By default `kandor` shares the host's OpenCode data directory (the session
-database and stored logins). Use `--isolated` (or `--profile NAME`) for a
-**sandbox-only profile** under `~/.local/share/kandor/<profile>`: the host
-config is copied in once, so plugins and settings keep working, but stored
-credentials, host sessions and the host session database are not exposed.
+By default `kandor` shares the host's state the way the agent expects it:
+OpenCode shares its data directory (the session database and stored logins),
+and the other built-in agents have their state directories copied into the
+sandbox. Use `--isolated` (or `--profile NAME`) for a **sandbox-only
+profile** under `~/.local/share/kandor/<profile>`: the host config is copied
+in once, so plugins and settings keep working, but stored credentials, host
+sessions and the host session database are not exposed.
 
-`kandor` currently supports OpenCode only. `KANDOR_BIN` overrides the path
-to the `opencode` binary.
+Pick the agent with `--agent`, `KANDOR_AGENT`, `default_agent` in the
+configuration, or a project's `.kandor.toml`. `opencode` is the default;
+`claude`, `pi` and `copilot` are built in, and any other harness is a
+`[agents.<name>]` section in the configuration, no code needed. To sandbox
+something that is not an agent at all, use `kandor exec`:
+
+```sh
+kandor --agent pi
+kandor exec -- pytest -q
+```
+
+`KANDOR_BIN` overrides the agent binary path.
 
 Create a commented configuration file at `~/.config/kandor/config.toml` (or
 `$KANDOR_CONFIG`) with:
@@ -41,7 +55,7 @@ kandor --init-config
 ```
 
 `kandor` consumes its own options (`-C`, `--profile`, `--env`, ...) before
-OpenCode sees them. Pass flags that collide with kandor options after `--`.
+the agent sees them. Pass flags that collide with kandor options after `--`.
 Options `kandor` does not know, such as OpenCode's `--continue` or
 `--model`, are passed through unchanged.
 
@@ -52,7 +66,7 @@ Options `kandor` does not know, such as OpenCode's `--continue` or
 - `git`, optional (used to find and protect the project's repository)
 - Go 1.27+ to build or `go install` from source
 - Working unprivileged user namespaces, or a setuid `bwrap` installation
-- `opencode` in `PATH` (or set `KANDOR_BIN`)
+- the agent binary in `PATH` (default `opencode`), or set `KANDOR_BIN`
 
 Check that bubblewrap works on your system:
 
@@ -111,6 +125,12 @@ the result is a single static binary you can copy anywhere.
 # Start the TUI in the current project (shares the host's sessions)
 kandor
 
+# Pick another built-in agent
+kandor --agent pi
+
+# Sandbox an arbitrary command instead of an agent
+kandor exec -- pytest -q
+
 # Use a sandbox-only profile instead
 kandor --isolated
 kandor --isolated --profile work
@@ -134,7 +154,7 @@ kandor --shell
 kandor --dry-run
 ```
 
-Options and arguments are passed to OpenCode after the first positional
+Options and arguments are passed to the agent after the first positional
 argument or after `--`. A positional directory is used as the project
 directory (like `-C`):
 

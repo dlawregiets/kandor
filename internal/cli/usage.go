@@ -3,24 +3,26 @@ package cli
 // Usage returns the --help text.
 func Usage() string { return usage }
 
-const usage = `Run OpenCode inside a bubblewrap sandbox.
+const usage = `Run a coding agent inside a bubblewrap sandbox.
 
 Usage:
-  kandor [options] [--] [opencode arguments...]
+  kandor [options] [--] [agent arguments...]
+  kandor [options] exec [--] CMD...
 
 The current directory (or --dir) is the only project directory mounted
-read-write.  Your home directory is hidden.  By default OpenCode shares
-the host's data directory (sessions and stored logins).
-Use --isolated (or --profile) for a sandbox-only profile
-under ~/.local/share/kandor/<profile>: the host config is copied in once so
-plugins and settings keep working, but host sessions and stored credentials
-are not exposed.
+read-write.  Your home directory is hidden.  --agent picks the coding agent:
+opencode (default), claude, pi, copilot, or any [agents.<name>] section from
+the configuration.  By default the agent shares host state as its built-in
+descriptor declares it; --isolated (or --profile) gives it a sandbox-only
+profile under ~/.local/share/kandor/<profile>, seeded once from the host
+config, without host sessions or stored credentials.  'kandor exec' runs a
+command instead of an agent.
 
 Options:
   -C, --dir DIR           Project directory (default: current directory)
-      --agent NAME          Coding agent to run (default: opencode, or
-                           default_agent from the project or user file;
-                           KANDOR_AGENT overrides both)
+      --agent NAME        Coding agent to run: opencode (default), claude,
+                          pi, copilot, or a configured [agents.<name>];
+                          KANDOR_AGENT and default_agent also select it
       exec [--] CMD...      Run CMD in the sandbox instead of an agent;
                            kandor options come before exec
       --ro PATH           Mount PATH read-only (repeatable)
@@ -28,7 +30,7 @@ Options:
       --env NAME[=VALUE]  Pass an environment variable into the sandbox
                           (repeatable).  Without =VALUE, the host value is used.
       --isolated          Use a sandbox-only profile instead of host state
-      --shared            Share the host's OpenCode data (default)
+      --shared            Share the agent's host state (default)
       --profile NAME      Isolated profile name (implies --isolated;
                           default: "default")
       --no-seed           Do not copy the host config into a new isolated
@@ -49,7 +51,7 @@ Options:
                           protection; may prevent TUI resize).  Default: on
                           only when the kernel permits TIOCSTI.
       --no-new-session    Keep the controlling terminal (enables TUI resize)
-      --shell             Run a shell inside the sandbox instead of OpenCode
+      --shell             Run a shell inside the sandbox instead of an agent
       --init-config       Create a commented config file at the standard path
                           (or $KANDOR_CONFIG) and exit; never overwrites
       --init-project      Create .kandor.toml in the project directory and
@@ -62,8 +64,8 @@ Options:
   -h, --help              Show this help
   -V, --version           Show the wrapper version
 
-Everything after "--" is passed to OpenCode verbatim.  Unknown options are
-also passed to OpenCode, so these are equivalent:
+Everything after "--" is passed to the agent verbatim.  Unknown options are
+also passed to the agent, so these are equivalent:
   kandor --continue
   kandor -- --continue
 
@@ -71,6 +73,7 @@ A positional directory is used as the project directory (like -C).
 
 Examples:
   kandor
+  kandor --agent pi
   kandor -C ~/code/my-project
   kandor run "fix the failing tests"
   kandor -C ~/code/proj --isolated --profile work
@@ -87,11 +90,11 @@ Configuration files:
   $KANDOR_CONFIG, or $XDG_CONFIG_HOME/kandor/config.toml
   (default ~/.config/kandor/config.toml), plus .kandor.toml in the project
   directory.  TOML with the sections [mounts], [env], [sandbox],
-  [credentials], [git], [profile] and [agents.opencode]; the user file may
+  [credentials], [git], [profile] and [agents.<name>]; the user file may
   also define reusable [sections.NAME] stacks that a project file opts into
   with include = [...] ([sections.default] always applies).
   Run 'kandor --init-config' for a commented example.  Layers apply in order,
   later wins: user file, its default and included sections, the project
-  file, [agents.opencode], the command line.  Project keys that widen the
+  file, [agents.<name>], the command line.  Project keys that widen the
   sandbox print a warning.
 `

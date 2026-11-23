@@ -74,12 +74,6 @@ func TestSubcommandsAndExclusions(t *testing.T) {
 	if !OpenCode.ExcludeEnv("OPENCODE_SERVER_PASSWORD") || !OpenCode.ExcludeEnv("AI_AGENT") || OpenCode.ExcludeEnv("ANTHROPIC_API_KEY") {
 		t.Error("ExcludeEnv wrong")
 	}
-	if a, ok := Lookup("opencode"); !ok || a.Executable() != "opencode" || a.Name() != "opencode" {
-		t.Error("Lookup(opencode) failed")
-	}
-	if _, ok := Lookup("pi"); ok {
-		t.Error("Lookup(pi) succeeded")
-	}
 }
 
 type fixture struct {

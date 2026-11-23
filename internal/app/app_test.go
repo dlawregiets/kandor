@@ -54,7 +54,7 @@ func TestMainVersion(t *testing.T) {
 
 func TestMainHelp(t *testing.T) {
 	code, out, _ := call(t, "--help")
-	if code != 0 || !strings.Contains(out, "Run OpenCode inside a bubblewrap sandbox.") {
+	if code != 0 || !strings.Contains(out, "Run a coding agent inside a bubblewrap sandbox.") {
 		t.Errorf("--help = %d, %q", code, out)
 	}
 }

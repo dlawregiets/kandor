@@ -276,6 +276,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		AgentBinds: state.Binds,
 		AgentMasks: state.Masks,
 		Binary:     binary,
+		AgentName:  agentName,
 		XDGConfig:  host.Config,
 		Getenv:     os.Getenv,
 		Warn:       o.warn,
