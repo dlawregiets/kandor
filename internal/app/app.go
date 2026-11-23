@@ -62,30 +62,36 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	loc := config.Locate(os.Getenv)
+	home, homeErr := validHome(os.Getenv("HOME"))
 	if pre.InitConfig {
+		// Without an explicit path the file goes under HOME; do not fall
+		// back to a relative ".config" in the current directory.
+		explicitDir := loc.Explicit || filepath.IsAbs(os.Getenv("XDG_CONFIG_HOME"))
+		if homeErr != nil && !explicitDir {
+			return o.fail(homeErr)
+		}
 		if err := config.WriteTemplate(loc.TOML); err != nil {
 			return o.fail(err)
 		}
 		o.log("created " + loc.TOML)
 		return 0
 	}
+	if homeErr != nil {
+		return o.fail(homeErr)
+	}
 	file, err := config.Load(loc.TOML)
 	if err != nil {
 		return o.fail(err)
 	}
 
-	home, err := validHome(os.Getenv("HOME"))
-	if err != nil {
-		return o.fail(err)
-	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return o.fail(err)
 	}
 
-	// The agent may come from the project file, while the agent's subcommands
-	// decide whether a positional argument is a project directory.  Resolve
-	// the pair together until the project directory stops changing.
+	// Exec and --init-project run no agent, so no agent (ambient or explicit)
+	// may block them.  Parse them with no agent subcommands and resolve the
+	// project directory once.
 	projDir := config.ResolveProjectDir(pre.Overrides, cwd)
 	var (
 		proj      *config.File
@@ -93,33 +99,59 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		agentName string
 		req       cli.Request
 	)
-	stable := false
-	for range 4 {
-		if proj, haveProj, err = config.LoadProject(projDir); err != nil {
-			return o.fail(err)
-		}
-		agentName = resolveAgent(pre.Agent, proj, file)
-		known := agent.Known(file.Agents, proj.Agents)
-		if !slices.Contains(known, agentName) {
-			return o.fail(fmt.Errorf("unknown agent %q (known: %s)", agentName, strings.Join(known, ", ")))
-		}
-		req, err = cli.Parse(args, agent.IsSubcommandFor(agentName, parseAgent(agentName, file, proj)))
+	noAgent := pre.Exec || pre.InitProject
+	if noAgent {
+		req, err = cli.Parse(args, func(string) bool { return false })
 		if err != nil {
 			return o.fail(err)
 		}
-		next := config.ResolveProjectDir(req.Overrides, cwd)
-		if next == projDir {
-			stable = true
-			break
+		projDir = config.ResolveProjectDir(req.Overrides, cwd)
+		if proj, haveProj, err = config.LoadProject(projDir); err != nil {
+			return o.fail(err)
 		}
-		projDir = next
-	}
-	if !stable {
-		return o.fail(errors.New("cannot resolve the project directory consistently; use -C or --agent to disambiguate"))
+		// An explicit --agent is still validated even though no agent runs.
+		if req.Agent != "" {
+			known := agent.Known(file.Agents, proj.Agents)
+			if !slices.Contains(known, req.Agent) {
+				return o.fail(fmt.Errorf("unknown agent %q (known: %s)", req.Agent, strings.Join(known, ", ")))
+			}
+		}
+	} else {
+		// The agent may come from the project file, while the agent's
+		// subcommands decide whether a positional argument is a project
+		// directory.  Resolve the pair together until the project directory
+		// stops changing.
+		stable := false
+		for range 4 {
+			if proj, haveProj, err = config.LoadProject(projDir); err != nil {
+				return o.fail(err)
+			}
+			agentName = resolveAgent(pre.Agent, proj, file)
+			known := agent.Known(file.Agents, proj.Agents)
+			if !slices.Contains(known, agentName) {
+				return o.fail(fmt.Errorf("unknown agent %q (known: %s)", agentName, strings.Join(known, ", ")))
+			}
+			req, err = cli.Parse(args, agent.IsSubcommandFor(agentName, parseAgent(agentName, file, proj)))
+			if err != nil {
+				return o.fail(err)
+			}
+			next := config.ResolveProjectDir(req.Overrides, cwd)
+			if next == projDir {
+				stable = true
+				break
+			}
+			projDir = next
+		}
+		if !stable {
+			return o.fail(errors.New("cannot resolve the project directory consistently; use -C or --agent to disambiguate"))
+		}
 	}
 	projPath := config.ProjectPath(projDir)
 
 	if req.Exec {
+		if req.InitProject {
+			return o.fail(errors.New("exec and --init-project are mutually exclusive"))
+		}
 		if req.Shell {
 			return o.fail(errors.New("--shell and exec are mutually exclusive"))
 		}
@@ -131,6 +163,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 	}
 	if req.InitProject {
+		if req.Shell {
+			return o.fail(errors.New("--shell and --init-project are mutually exclusive"))
+		}
+		if req.DryRun {
+			return o.fail(errors.New("--init-project and --dry-run are mutually exclusive"))
+		}
 		dir, err := validProject(projDir, home)
 		if err != nil {
 			return o.fail(err)
@@ -218,6 +256,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		tmpdir = "/tmp"
 	}
 	uid := os.Getuid()
+	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
+	if runtimeDir == "" {
+		runtimeDir = "/run/user/" + strconv.Itoa(uid)
+	}
+	runtimeDir = paths.ResolveMaybe(runtimeDir, cwd)
+	if st, err := os.Stat(runtimeDir); err != nil || !st.IsDir() {
+		runtimeDir = "/tmp/kandor-runtime"
+	}
 	// From here on kandor creates temporary files.  Catch signals until they
 	// are cleaned up (deferred calls run in reverse, so the guard stops last).
 	guard := runner.NewGuard()
@@ -230,12 +276,17 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if req.Exec {
 		// No agent state: XDG data gets a private temporary directory
 		// instead of the host's.
-		execData, err := os.MkdirTemp("", "kandor-exec-data")
-		if err != nil {
-			return o.fail(err)
+		if req.DryRun {
+			// Plan a path without creating it; a dry run writes nothing.
+			layout.Data = paths.ResolveMaybe(filepath.Join(tmpdir, "kandor-exec-data"), cwd)
+		} else {
+			execData, err := os.MkdirTemp("", "kandor-exec-data")
+			if err != nil {
+				return o.fail(err)
+			}
+			defer os.RemoveAll(execData)
+			layout.Data = execData
 		}
-		defer os.RemoveAll(execData)
-		layout.Data = execData
 	}
 	layout.Writable = writableMounts(s.Mounts)
 	state := agent.State{}
@@ -250,22 +301,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		spec := agent.Resolve(ag.Name(), s.Agent)
 		state.Binds = append(state.Binds,
 			agent.Materialize(spec, filepath.Join(layout.Cache, ag.Name(), "paths"),
-				filepath.Join(layout.HostCache, "kandor", ag.Name()), home, req.DryRun, layout.Isolated, o.warn)...)
+				filepath.Join(layout.HostCache, "kandor", ag.Name()),
+				paths.Host{Home: home, RuntimeDir: runtimeDir, UID: uid},
+				req.DryRun, layout.Isolated, o.warn)...)
 	}
 
 	newSession, explicit := sandbox.NewSessionDefault(s.NewSession, sandbox.TIOCSTIPath)
 	if newSession && !explicit {
 		o.warn("TIOCSTI is enabled on this kernel; using --new-session for safety")
 		o.warn("terminal resizing may not work; pass --no-new-session to disable it")
-	}
-
-	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
-	if runtimeDir == "" {
-		runtimeDir = "/run/user/" + strconv.Itoa(uid)
-	}
-	runtimeDir = paths.ResolveMaybe(runtimeDir, cwd)
-	if st, err := os.Stat(runtimeDir); err != nil || !st.IsDir() {
-		runtimeDir = "/tmp/kandor-runtime"
 	}
 
 	p := sandbox.NewPlan(features)
@@ -474,7 +518,11 @@ func validProject(dir, home string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("project directory does not exist: %s", dir)
 	}
-	switch st, _ := os.Stat(resolved); {
+	st, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("cannot inspect the project directory: %s", resolved)
+	}
+	switch {
 	case !st.IsDir():
 		return "", fmt.Errorf("not a directory: %s", resolved)
 	case resolved == "/":

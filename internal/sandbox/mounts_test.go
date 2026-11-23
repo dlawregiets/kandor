@@ -150,6 +150,23 @@ func TestMountsAgentBinds(t *testing.T) {
 	}
 }
 
+// A child bind must be applied after its parent even when the caller lists
+// them in the other order.
+func TestMountsAgentBindsParentBeforeChild(t *testing.T) {
+	e := newEnv(t)
+	parent := filepath.Join(e.home, "state")
+	child := filepath.Join(parent, "bin")
+	e.in.AgentBinds = []agent.Bind{
+		{Src: child, Dest: child, Writable: true},
+		{Src: parent, Dest: parent, Writable: true},
+	}
+	args, _ := e.build(t)
+	parentAt, childAt := indexSeq(args, "--bind", parent, parent), indexSeq(args, "--bind", child, child)
+	if parentAt < 0 || childAt < 0 || parentAt > childAt {
+		t.Errorf("parent bind is not before the child bind: %q", args)
+	}
+}
+
 func TestMountsSettingsOrder(t *testing.T) {
 	e := newEnv(t)
 	x := filepath.Join(e.home, "go")

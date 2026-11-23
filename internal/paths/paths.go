@@ -79,5 +79,8 @@ func isTopLevel(p string) bool {
 
 // Contains reports whether p is parent or lies below it.
 func Contains(parent, p string) bool {
+	if parent == "/" {
+		return strings.HasPrefix(p, "/")
+	}
 	return p == parent || strings.HasPrefix(p, parent+"/")
 }

@@ -46,11 +46,15 @@ func initProject(projDir string, user *config.File, stdin io.Reader, stderr io.W
 func promptSections(sections map[string]config.Section, stdin io.Reader, stderr io.Writer) []string {
 	names := make([]string, 0, len(sections))
 	for name := range sections {
+		// The "default" section always applies; including it is a no-op.
+		if name == "default" {
+			continue
+		}
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	if len(names) == 0 {
-		fmt.Fprintln(stderr, "kandor: no sections defined in the user configuration; writing an empty include list")
+		fmt.Fprintln(stderr, "kandor: no optional sections defined in the user configuration; writing an empty include list")
 		return nil
 	}
 	fmt.Fprintln(stderr, "kandor: sections in the user configuration:")

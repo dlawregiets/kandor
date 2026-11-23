@@ -98,6 +98,11 @@ func WideningKeys(f *File, agent string) []string {
 		addAs("agents.*.mounts.read_write", prefix+"mounts.read_write", a.Mounts.ReadWrite)
 		addAs("agents.*.env.pass", prefix+"env.pass", a.Env.Pass)
 		addAs("agents.*.env.set", prefix+"env.set", a.Env.Set)
+		addAs("agents.*.paths.share", prefix+"paths.share", a.Paths.Share)
+		addAs("agents.*.paths.copy", prefix+"paths.copy", a.Paths.Copy)
+		addAs("agents.*.paths.private", prefix+"paths.private", a.Paths.Private)
+		addAs("agents.*.paths.ro", prefix+"paths.ro", a.Paths.RO)
+		addAs("agents.*.paths.cache", prefix+"paths.cache", a.Paths.Cache)
 	}
 	return out
 }

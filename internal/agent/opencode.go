@@ -44,8 +44,15 @@ func (opencode) Command(bin string, args []string) ([]string, error) {
 		args = args[1:]
 	}
 
+	// Options after "--" are positional arguments (a prompt that happens to
+	// be "--server"), not flags.
+	flags := args
+	if i := slices.Index(args, "--"); i >= 0 {
+		flags = args[:i]
+	}
+
 	first := ""
-	for _, a := range args {
+	for _, a := range flags {
 		if a == "" || a[0] != '-' {
 			first = a
 			break
@@ -59,21 +66,16 @@ func (opencode) Command(bin string, args []string) ([]string, error) {
 	case "pair":
 		return nil, fmt.Errorf("refusing to run 'opencode pair' inside the sandbox (it connects to the host service)")
 	}
-	for _, a := range args {
-		if a == "--server" || a == "--service" || len(a) > 9 && a[:9] == "--server=" {
+	for _, a := range flags {
+		if a == "--server" || strings.HasPrefix(a, "--server=") ||
+			a == "--service" || strings.HasPrefix(a, "--service=") {
 			return nil, fmt.Errorf("refusing '%s' inside the sandbox; the sandbox always uses a private server", a)
 		}
 	}
-	if first == "acp" && slices.Contains(args, "--login") {
+	if first == "acp" && slices.Contains(flags, "--login") {
 		return nil, fmt.Errorf("use 'kandor auth login' instead of 'acp --login' inside the sandbox")
 	}
 
-	// Options after "--" are positional arguments (a prompt that happens to
-	// be "--help"), not flags.
-	flags := args
-	if i := slices.Index(args, "--"); i >= 0 {
-		flags = args[:i]
-	}
 	cmd := []string{bin}
 	switch {
 	case len(args) == 0:

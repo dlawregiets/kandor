@@ -183,6 +183,23 @@ func TestLoadInvalidEnvName(t *testing.T) {
 	if !strings.Contains(err.Error(), "invalid environment variable name: 1X") {
 		t.Errorf("agent env error = %q", err)
 	}
+	for _, content := range []string{
+		"[env]\npass = [\"BAD-NAME\"]\n",
+		"[agents.opencode.env]\npass = [\"BAD-NAME\"]\n",
+		"[sections.go.env]\npass = [\"BAD-NAME\"]\n",
+		"[sections.go.agents.opencode.env]\npass = [\"BAD-NAME\"]\n",
+	} {
+		if _, err := loadErr(t, content); !strings.Contains(err.Error(), "invalid environment variable name: BAD-NAME") {
+			t.Errorf("Load(%q) error = %q", content, err)
+		}
+	}
+}
+
+func TestLoadInvalidSectionAgent(t *testing.T) {
+	_, err := loadErr(t, "[sections.go.agents.Bad]\n")
+	if !strings.Contains(err.Error(), `sections.go: invalid agent name "Bad"`) {
+		t.Errorf("error = %q", err)
+	}
 }
 
 func env(m map[string]string) func(string) string {

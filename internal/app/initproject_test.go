@@ -64,6 +64,25 @@ func TestMainInitProjectNoSections(t *testing.T) {
 	}
 }
 
+func TestMainInitProjectSkipsDefaultSection(t *testing.T) {
+	project := t.TempDir()
+	code, _, errs := initProjectCall(t, "", "[sections.default.mounts]\nread_write = [\"~/.cache/go-build\"]\n",
+		project, "--init-project")
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errs)
+	}
+	if strings.Contains(errs, `include "default"`) {
+		t.Errorf("--init-project prompted for the default section: %q", errs)
+	}
+	content, err := os.ReadFile(config.ProjectPath(project))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "include = []") {
+		t.Errorf("project file includes the default section:\n%s", content)
+	}
+}
+
 func TestMainInitProjectBadDir(t *testing.T) {
 	configFile(t, "")
 	if code, _, errs := callIn(t, "", "-C", "/", "--init-project"); code != 1 ||

@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/dlawregiets/kandor/internal/agent"
@@ -62,13 +63,10 @@ func BuildMounts(p *Plan, in Input) (Result, error) {
 	// Hide the home directory.  bwrap resolves mount sources before applying
 	// mounts, so binding paths below HOME afterwards still works.
 	homeParent := home
-	for _, parent := range []string{"/home", "/tmp", "/var/tmp", "/mnt", "/media", "/srv"} {
+	for _, parent := range []string{"/home", "/var/home", "/root", "/tmp", "/var/tmp", "/mnt", "/media", "/srv"} {
 		if strings.HasPrefix(home, parent+"/") {
 			homeParent = parent
 		}
-	}
-	if home == "/root" {
-		homeParent = "/root"
 	}
 	mode := ""
 	if homeParent == "/tmp" || homeParent == "/var/tmp" {
@@ -115,7 +113,14 @@ func BuildMounts(p *Plan, in Input) (Result, error) {
 		}
 	}
 
-	for _, b := range in.AgentBinds {
+	// A child bind must land inside an earlier parent bind, whatever
+	// produced them (Prepare and Materialize each sort their own lists, but
+	// a user path can be a parent of a prepared one).
+	binds := slices.Clone(in.AgentBinds)
+	slices.SortStableFunc(binds, func(a, b agent.Bind) int {
+		return mountDepth(a.Dest) - mountDepth(b.Dest)
+	})
+	for _, b := range binds {
 		if b.Writable {
 			p.RW(b.Src, b.Dest)
 		} else {
@@ -350,6 +355,11 @@ func roSymlinkTargets(p *Plan, in Input, dir string) {
 
 func isTopLevel(p string) bool {
 	return len(p) > 1 && p[0] == '/' && !strings.Contains(p[1:], "/")
+}
+
+// mountDepth counts the path components of p, so parents sort before children.
+func mountDepth(p string) int {
+	return strings.Count(filepath.Clean(p), string(filepath.Separator))
 }
 
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }

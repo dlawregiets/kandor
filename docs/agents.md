@@ -57,7 +57,12 @@ Probed from `pi --help` (pi 1.4.0): global settings live in
 `~/.pi/agent/settings.json` and sessions in `~/.pi/agent/sessions/`. The
 built-in descriptor:
 
-- copies `~/.pi` into the profile (settings, login, model store);
+- copies the small state under `~/.pi` into the profile (settings, login,
+  model store);
+- shares the derived trees with the host instead of copying them: installed
+  extensions (`~/.pi/agent/npm`) and pi's own releases
+  (`~/.pi/agent/install`). They run to over a gigabyte, and copying them made
+  every start pay a full tree copy;
 - keeps `~/.pi/agent/sessions` shared read-write with the host, so a session
   started in the sandbox can be resumed later (and host sessions are
   visible), the same trade-off as OpenCode's shared data directory;

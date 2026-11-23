@@ -79,6 +79,21 @@ func TestMainInitConfig(t *testing.T) {
 	}
 }
 
+func TestMainInitConfigNeedsHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("KANDOR_CONFIG", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	dir := t.TempDir()
+	t.Chdir(dir)
+	code, _, errs := call(t, "--init-config")
+	if code != 1 || !strings.Contains(errs, "HOME is not set") {
+		t.Errorf("code = %d, stderr = %q", code, errs)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".config")); err == nil {
+		t.Error("--init-config wrote a relative .config without HOME")
+	}
+}
+
 func TestMainBadOption(t *testing.T) {
 	code, _, errs := call(t, "--ro")
 	if code != 1 || errs != "kandor: error: --ro requires a path\n" {
@@ -122,6 +137,19 @@ func TestMainDryRun(t *testing.T) {
 		if strings.Contains(bwrapArgs, leak) {
 			t.Errorf("bwrap's arguments contain %q:\n%s", leak, bwrapArgs)
 		}
+	}
+}
+
+func TestMainDryRunNeedsNoWritableTmp(t *testing.T) {
+	requireBwrap(t)
+	configFile(t, "")
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	project, _ := filepath.EvalSymlinks(t.TempDir())
+	if code, _, errs := call(t, "-C", project, "--dry-run"); code != 0 {
+		t.Errorf("agent dry-run: code = %d, stderr = %q", code, errs)
+	}
+	if code, _, errs := call(t, "-C", project, "--dry-run", "exec", "--", "true"); code != 0 {
+		t.Errorf("exec dry-run: code = %d, stderr = %q", code, errs)
 	}
 }
 
@@ -385,6 +413,61 @@ func TestMainExecValidation(t *testing.T) {
 	if code, _, errs := call(t, "--isolated", "exec", "--", "true"); code != 1 ||
 		!strings.Contains(errs, "exec does not take --isolated, --profile or --no-seed") {
 		t.Errorf("--isolated exec: code = %d, stderr = %q", code, errs)
+	}
+	if code, _, errs := call(t, "--init-project", "exec", "--", "true"); code != 1 ||
+		!strings.Contains(errs, "exec and --init-project are mutually exclusive") {
+		t.Errorf("init-project exec: code = %d, stderr = %q", code, errs)
+	}
+	if code, _, errs := call(t, "--init-project", "--shell"); code != 1 ||
+		!strings.Contains(errs, "--shell and --init-project are mutually exclusive") {
+		t.Errorf("init-project --shell: code = %d, stderr = %q", code, errs)
+	}
+	if code, _, errs := call(t, "--init-project", "--dry-run"); code != 1 ||
+		!strings.Contains(errs, "--init-project and --dry-run are mutually exclusive") {
+		t.Errorf("init-project --dry-run: code = %d, stderr = %q", code, errs)
+	}
+}
+
+func TestMainExecIgnoresAmbientAgent(t *testing.T) {
+	requireBwrap(t)
+	configFile(t, "default_agent = \"aider\"\n")
+	t.Setenv("KANDOR_AGENT", "aider")
+	project, _ := filepath.EvalSymlinks(t.TempDir())
+	code, out, errs := call(t, "-C", project, "--dry-run", "exec", "--", "true")
+	if code != 0 || !strings.Contains(out, " bwrap ") {
+		t.Fatalf("code = %d, stdout = %q, stderr = %q", code, out, errs)
+	}
+}
+
+func TestMainExecDoesNotMountAgentTools(t *testing.T) {
+	requireBwrap(t)
+	home, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Setenv("HOME", home)
+	agentBin := filepath.Join(home, ".opencode", "bin")
+	if err := os.MkdirAll(agentBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile(t, "")
+	project, _ := filepath.EvalSymlinks(t.TempDir())
+	code, out, errs := call(t, "-C", project, "--dry-run", "exec", "--", "true")
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errs)
+	}
+	if strings.Contains(out, "--ro-bind "+agentBin+" "+agentBin) {
+		t.Errorf("exec mounted the agent's tool directory:\n%s", out)
+	}
+}
+
+func TestMainInitProjectIgnoresAmbientAgent(t *testing.T) {
+	configFile(t, "")
+	t.Setenv("KANDOR_AGENT", "bogus")
+	project, _ := filepath.EvalSymlinks(t.TempDir())
+	code, _, errs := call(t, "-C", project, "--init-project")
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errs)
+	}
+	if _, err := os.Stat(config.ProjectPath(project)); err != nil {
+		t.Errorf("--init-project did not write the project file: %v", err)
 	}
 }
 

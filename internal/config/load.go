@@ -85,6 +85,9 @@ func Load(path string) (*File, error) {
 }
 
 func validate(f *File) error {
+	if err := validateEnvNames(f.Env.Pass); err != nil {
+		return err
+	}
 	if err := validateEnvSet(f.Env.Set); err != nil {
 		return err
 	}
@@ -100,8 +103,52 @@ func validate(f *File) error {
 		if !validAgentName(name) {
 			return fmt.Errorf("invalid agent name %q (use lowercase letters, digits, '-' and '_'; not \"exec\" or \"default\")", name)
 		}
-		if err := validateEnvSet(f.Agents[name].Env.Set); err != nil {
+		a := f.Agents[name]
+		if err := validateEnvNames(a.Env.Pass); err != nil {
 			return err
+		}
+		if err := validateEnvSet(a.Env.Set); err != nil {
+			return err
+		}
+	}
+	sectionNames := make([]string, 0, len(f.Sections))
+	for name := range f.Sections {
+		sectionNames = append(sectionNames, name)
+	}
+	sort.Strings(sectionNames)
+	for _, name := range sectionNames {
+		sec := f.Sections[name]
+		if err := validateEnvNames(sec.Env.Pass); err != nil {
+			return fmt.Errorf("sections.%s: %w", name, err)
+		}
+		if err := validateEnvSet(sec.Env.Set); err != nil {
+			return fmt.Errorf("sections.%s: %w", name, err)
+		}
+		agentNames := make([]string, 0, len(sec.Agents))
+		for agentName := range sec.Agents {
+			agentNames = append(agentNames, agentName)
+		}
+		sort.Strings(agentNames)
+		for _, agentName := range agentNames {
+			if !validAgentName(agentName) {
+				return fmt.Errorf("sections.%s: invalid agent name %q (use lowercase letters, digits, '-' and '_'; not \"exec\" or \"default\")", name, agentName)
+			}
+			a := sec.Agents[agentName]
+			if err := validateEnvNames(a.Env.Pass); err != nil {
+				return fmt.Errorf("sections.%s.agents.%s: %w", name, agentName, err)
+			}
+			if err := validateEnvSet(a.Env.Set); err != nil {
+				return fmt.Errorf("sections.%s.agents.%s: %w", name, agentName, err)
+			}
+		}
+	}
+	return nil
+}
+
+func validateEnvNames(names []string) error {
+	for _, name := range names {
+		if !envName.MatchString(name) {
+			return fmt.Errorf("invalid environment variable name: %s", name)
 		}
 	}
 	return nil

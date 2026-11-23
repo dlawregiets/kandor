@@ -183,3 +183,24 @@ func TestSetupDryRunKeepsStale(t *testing.T) {
 		t.Error("dry-run removed a stale shared directory")
 	}
 }
+
+func TestSetupDryRunSharedCreatesNothing(t *testing.T) {
+	h := host(t)
+	// The planned temporary directory need not exist: a dry run must not
+	// create it, and must not fail when TMPDIR is unwritable.
+	tmp := filepath.Join(t.TempDir(), "does-not-exist")
+	l, cleanup, err := Setup(config.Settings{}, h, "", tmp, 1000, "", true)
+	if err != nil {
+		t.Fatalf("dry-run needs a writable TMPDIR: %v", err)
+	}
+	defer cleanup()
+	if l.Data != h.Data || l.Isolated || !l.DryRun {
+		t.Errorf("layout = %+v", l)
+	}
+	if !strings.HasPrefix(l.Config, tmp+string(filepath.Separator)) {
+		t.Errorf("config path %q is not under TMPDIR %q", l.Config, tmp)
+	}
+	if _, err := os.Stat(tmp); err == nil {
+		t.Error("dry-run created the temporary directory")
+	}
+}

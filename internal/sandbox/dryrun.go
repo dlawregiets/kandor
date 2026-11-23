@@ -8,13 +8,14 @@ import (
 var urlCredentials = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]+@(.*)$`)
 
 func redactedName(name string) bool {
+	upper := strings.ToUpper(name)
 	for _, s := range []string{"KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"} {
-		if strings.Contains(name, s) {
+		if strings.Contains(upper, s) {
 			return true
 		}
 	}
-	return strings.HasPrefix(name, "AWS_") || strings.HasPrefix(name, "AZURE_") ||
-		name == "GOOGLE_APPLICATION_CREDENTIALS" || name == "SSH_AUTH_SOCK"
+	return strings.HasPrefix(upper, "AWS_") || strings.HasPrefix(upper, "AZURE_") ||
+		upper == "GOOGLE_APPLICATION_CREDENTIALS" || upper == "SSH_AUTH_SOCK"
 }
 
 // FormatCommand renders the environment env and argv for --dry-run as an

@@ -53,12 +53,23 @@ func TestWideningKeys(t *testing.T) {
 		Env:     EnvSection{Pass: []string{"TOKEN"}, Set: map[string]string{"A": "1"}},
 		Sandbox: SandboxSection{Network: ptr(true)},
 		Git:     GitSection{Protect: ptr(false)},
-		Agents:  map[string]AgentSection{"opencode": {Binary: ptr("/x")}},
+		Agents: map[string]AgentSection{"opencode": {
+			Binary: ptr("/x"),
+			Paths: AgentPaths{
+				Share:   []string{"~/share"},
+				Copy:    []string{"~/copy"},
+				Private: []string{"~/private"},
+				RO:      []string{"~/ro"},
+				Cache:   []string{"~/cache"},
+			},
+		}},
 	}
 	got := WideningKeys(proj, "opencode")
 	want := []string{
 		"mounts.read_only", "mounts.read_write", "env.pass", "env.set",
 		"sandbox.network", "git.protect", "agents.opencode.binary",
+		"agents.opencode.paths.share", "agents.opencode.paths.copy",
+		"agents.opencode.paths.ro",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("WideningKeys = %v, want %v", got, want)

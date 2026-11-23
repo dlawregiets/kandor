@@ -56,16 +56,22 @@ var builtinSpecs = []Spec{
 	},
 	{
 		// Probed against pi 1.4.0 (pi --help).  Settings and login live
-		// under ~/.pi; sessions and downloaded helper binaries (fd) are
-		// shared with the host so they survive between runs and are not
-		// downloaded again each time.
+		// under ~/.pi, so that directory is copied into the profile.  The
+		// derived trees are not: installed extensions (npm) and pi's own
+		// releases (install) are large and are shared with the host, and
+		// sessions and downloaded helper binaries (fd) are shared and
+		// cached, so a run neither copies them nor downloads them again.
 		Name: "pi",
 		Subcommands: []string{
 			"install", "remove", "uninstall", "update", "list",
 			"config", "auth", "mcp",
 		},
-		Copy:             []string{"~/.pi"},
-		Share:            []string{"~/.pi/agent/sessions"},
+		Copy: []string{"~/.pi"},
+		Share: []string{
+			"~/.pi/agent/sessions",
+			"~/.pi/agent/npm",
+			"~/.pi/agent/install",
+		},
 		Cache:            []string{"~/.pi/agent/bin"},
 		EnvExclude:       []string{"PI_"},
 		NodeCompileCache: true,
@@ -128,15 +134,16 @@ func appendUnique(dst, src []string) []string {
 }
 
 // Materialize turns spec paths into binds.  storeRoot holds the profile's
-// private copies (persistent when isolated, temporary when shared); home is
-// the host home for ~ expansion.  Missing host paths are skipped with a
-// warning so a fresh machine does not fail the run, except share paths,
-// which are created (share names state directories, not files).  With
-// dryRun, the binds are planned but nothing is copied or created.  With
-// isolated, share paths are seeded into the profile instead of exposed
-// read-write.
-func Materialize(spec Spec, storeRoot, cacheRoot, home string, dryRun, isolated bool, warn func(string)) []Bind {
+// private copies (persistent when isolated, temporary when shared); host is
+// the host paths for ~ expansion and broad-path checks.  Missing host paths
+// are skipped with a warning so a fresh machine does not fail the run,
+// except share paths, which are created (share names state directories, not
+// files).  With dryRun, the binds are planned but nothing is copied or
+// created.  With isolated, share paths are seeded into the profile instead
+// of exposed read-write.
+func Materialize(spec Spec, storeRoot, cacheRoot string, host paths.Host, dryRun, isolated bool, warn func(string)) []Bind {
 	var binds []Bind
+	home := host.Home
 	bind := func(src, dest string, writable bool) {
 		binds = append(binds, Bind{Src: src, Dest: dest, Writable: writable})
 	}
@@ -146,12 +153,25 @@ func Materialize(spec Spec, storeRoot, cacheRoot, home string, dryRun, isolated 
 		if raw == "" {
 			return "", false
 		}
-		exp := paths.Expand(raw, home)
+		exp := filepath.Clean(paths.Expand(raw, home))
 		if !filepath.IsAbs(exp) {
 			warn(fmt.Sprintf("agent path %s must be absolute or start with ~, skipping", raw))
 			return "", false
 		}
+		if host.IsBroad(exp) {
+			warn(fmt.Sprintf("agent path %s would expose too much of the host, skipping", raw))
+			return "", false
+		}
 		return exp, true
+	}
+	// resolvedOK rejects a path whose symlinks lead to a broad host path
+	// (for example ~/link-to-root).
+	resolvedOK := func(raw, resolved string) bool {
+		if host.IsBroad(resolved) {
+			warn(fmt.Sprintf("agent path %s resolves to %s, which would expose too much of the host; skipping", raw, resolved))
+			return false
+		}
+		return true
 	}
 	// existing resolves an absolute path that must already exist.
 	existing := func(raw string) (string, bool) {
@@ -162,6 +182,9 @@ func Materialize(spec Spec, storeRoot, cacheRoot, home string, dryRun, isolated 
 		resolved, err := paths.Resolve(exp)
 		if err != nil {
 			warn(fmt.Sprintf("agent path %s does not exist, skipping", raw))
+			return "", false
+		}
+		if !resolvedOK(raw, resolved) {
 			return "", false
 		}
 		return resolved, true
@@ -208,6 +231,9 @@ func Materialize(spec Spec, storeRoot, cacheRoot, home string, dryRun, isolated 
 			// A dry run may not create the directory it plans to bind.
 			resolved = paths.ResolveMaybe(exp, home)
 		}
+		if !resolvedOK(raw, resolved) {
+			continue
+		}
 		if isolated {
 			copyInto(resolved)
 			continue
@@ -233,6 +259,9 @@ func Materialize(spec Spec, storeRoot, cacheRoot, home string, dryRun, isolated 
 		// Private state may not exist on the host yet; normalize without
 		// requiring it.
 		resolved := paths.ResolveMaybe(exp, home)
+		if !resolvedOK(raw, resolved) {
+			continue
+		}
 		store := filepath.Join(storeRoot, storeRel(resolved, home))
 		if !dryRun {
 			if err := os.MkdirAll(store, 0o755); err != nil {
@@ -248,6 +277,9 @@ func Materialize(spec Spec, storeRoot, cacheRoot, home string, dryRun, isolated 
 			continue
 		}
 		resolved := paths.ResolveMaybe(exp, home)
+		if !resolvedOK(raw, resolved) {
+			continue
+		}
 		dir := filepath.Join(cacheRoot, storeRel(resolved, home))
 		if !dryRun {
 			if err := os.MkdirAll(dir, 0o755); err != nil {

@@ -61,24 +61,21 @@ func Setup(s config.Settings, host XDG, kandorHome, tmpdir string, uid int, scop
 	}
 
 	prefix := fmt.Sprintf("kandor-shared-%d.", uid)
-	var waitStale func()
-	if !dryRun {
-		waitStale = removeStaleAsync(tmpdir, prefix)
+	if dryRun {
+		// Plan a path without creating it: a dry run writes nothing.
+		shared := filepath.Join(tmpdir, prefix+"dry-run")
+		l.Config, l.State, l.Cache = filepath.Join(shared, "config"), filepath.Join(shared, "state"), filepath.Join(shared, "cache")
+		l.Data = host.Data
+		return l, func() {}, nil
 	}
+	waitStale := removeStaleAsync(tmpdir, prefix)
 	shared, err := os.MkdirTemp(tmpdir, prefix)
 	if err != nil {
 		return agent.Layout{}, nil, fmt.Errorf("cannot create a temporary shared profile")
 	}
 	cleanup := func() {
 		os.RemoveAll(shared)
-		if waitStale != nil {
-			waitStale()
-		}
-	}
-	if dryRun {
-		l.Config, l.State, l.Cache = filepath.Join(shared, "config"), filepath.Join(shared, "state"), filepath.Join(shared, "cache")
-		l.Data = host.Data
-		return l, cleanup, nil
+		waitStale()
 	}
 	if err := os.WriteFile(filepath.Join(shared, "pid"), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
 		cleanup()

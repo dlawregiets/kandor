@@ -57,6 +57,7 @@ func TestCommandRefusals(t *testing.T) {
 		"refusing to run 'opencode pair'":    {"pair"},
 		"refusing '--server=x'":              {"run", "--server=x"},
 		"refusing '--service'":               {"--service"},
+		"refusing '--service=http://x'":      {"run", "--service=http://x"},
 		"kandor auth login":                  {"acp", "--login"},
 	}
 	for want, args := range cases {
@@ -65,6 +66,13 @@ func TestCommandRefusals(t *testing.T) {
 			t.Errorf("Command(%q) error = %v, want %q", args, err, want)
 		}
 	}
+}
+
+// Flags after "--" are positional arguments, so they must not be refused.
+func TestCommandSeparatorIsPositional(t *testing.T) {
+	wantCmd(t, command(t, "run", "--", "--service=x"), "/bin/oc", "run", "--standalone", "--", "--service=x")
+	wantCmd(t, command(t, "acp", "--", "--login"), "/bin/oc", "acp", "--", "--login")
+	wantCmd(t, command(t, "--", "pair"), "/bin/oc", "--standalone", "--", "pair")
 }
 
 func TestSubcommandsAndExclusions(t *testing.T) {

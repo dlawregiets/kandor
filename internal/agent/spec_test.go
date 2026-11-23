@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/dlawregiets/kandor/internal/config"
+	"github.com/dlawregiets/kandor/internal/paths"
 )
 
 func ptr[T any](v T) *T { return &v }
@@ -42,7 +43,7 @@ func TestResolveMergesUserSection(t *testing.T) {
 		t.Errorf("Subcommands = %q, want %q", s.Subcommands, want)
 	}
 	// Built-in copies stay, user paths append.
-	if !slices.Equal(s.Share, []string{"~/.pi/agent/sessions", "~/share"}) ||
+	if !slices.Equal(s.Share, []string{"~/.pi/agent/sessions", "~/.pi/agent/npm", "~/.pi/agent/install", "~/share"}) ||
 		!slices.Equal(s.Copy, []string{"~/.pi", "~/copy"}) ||
 		!slices.Equal(s.Cache, []string{"~/.pi/agent/bin"}) {
 		t.Errorf("paths = %+v", s)
@@ -71,7 +72,7 @@ func testHome(t *testing.T) string {
 
 func TestMaterializeEmpty(t *testing.T) {
 	var warnings []string
-	if binds := Materialize(Spec{}, t.TempDir(), t.TempDir(), t.TempDir(), false, false, func(w string) { warnings = append(warnings, w) }); len(binds) != 0 {
+	if binds := Materialize(Spec{}, t.TempDir(), t.TempDir(), paths.Host{Home: t.TempDir()}, false, false, func(w string) { warnings = append(warnings, w) }); len(binds) != 0 {
 		t.Errorf("empty spec produced %d binds", len(binds))
 	}
 	if len(warnings) != 0 {
@@ -90,7 +91,7 @@ func TestMaterializeModes(t *testing.T) {
 		Copy:     []string{"~/.claude", "~/.claude.json"},
 		Private:  []string{"~/.pi", "/nowhere/private-dir"},
 	}
-	binds := Materialize(spec, store, t.TempDir(), home, false, false, warn)
+	binds := Materialize(spec, store, t.TempDir(), paths.Host{Home: home}, false, false, warn)
 	byDest := map[string]Bind{}
 	for _, b := range binds {
 		byDest[b.Dest] = b
@@ -165,6 +166,13 @@ func TestBuiltinPiAndCopilot(t *testing.T) {
 		!slices.Equal(pi.EnvExclude, []string{"PI_"}) || !slices.Contains(pi.Subcommands, "auth") {
 		t.Errorf("pi = %+v", pi)
 	}
+	// The derived trees stay out of the copy: copying them (over 1 GB of
+	// installed extensions and releases) dominated every start.
+	for _, tree := range []string{"~/.pi/agent/npm", "~/.pi/agent/install"} {
+		if !slices.Contains(pi.Share, tree) {
+			t.Errorf("pi shares %q only as a copy, want a shared mount: %+v", tree, pi.Share)
+		}
+	}
 	copilot := Resolve("copilot", config.AgentSection{})
 	if copilot.Binary != "copilot" || !slices.Equal(copilot.Copy, []string{"~/.copilot"}) ||
 		!slices.Equal(copilot.EnvExclude, []string{"COPILOT_"}) || !slices.Contains(copilot.Subcommands, "login") {
@@ -196,7 +204,7 @@ func TestMaterializeDryRunCopiesNothing(t *testing.T) {
 	binds := Materialize(Spec{
 		Copy:    []string{"~/.claude"},
 		Private: []string{"~/.pi"},
-	}, store, t.TempDir(), home, true, false, func(string) {})
+	}, store, t.TempDir(), paths.Host{Home: home}, true, false, func(string) {})
 	if len(binds) != 2 {
 		t.Errorf("binds = %+v", binds)
 	}
@@ -212,7 +220,7 @@ func TestMaterializeParentBeforeChild(t *testing.T) {
 		Copy:  []string{"~/.pi"},
 		Share: []string{"~/.pi/agent/sessions", "~/.pi/agent/bin"},
 	}
-	binds := Materialize(spec, store, t.TempDir(), home, false, false, func(string) {})
+	binds := Materialize(spec, store, t.TempDir(), paths.Host{Home: home}, false, false, func(string) {})
 	if len(binds) != 3 {
 		t.Fatalf("binds = %+v", binds)
 	}
@@ -236,7 +244,7 @@ func TestMaterializeShareCreatesMissingDir(t *testing.T) {
 	if _, err := os.Stat(missing); err == nil {
 		t.Fatal("fixture already has bin")
 	}
-	binds := Materialize(Spec{Share: []string{"~/.pi/agent/bin"}}, store, t.TempDir(), home, false, false, func(string) {})
+	binds := Materialize(Spec{Share: []string{"~/.pi/agent/bin"}}, store, t.TempDir(), paths.Host{Home: home}, false, false, func(string) {})
 	if len(binds) != 1 {
 		t.Fatalf("binds = %+v", binds)
 	}
@@ -245,7 +253,7 @@ func TestMaterializeShareCreatesMissingDir(t *testing.T) {
 	}
 	// A dry run plans without creating it.
 	other := filepath.Join(home, ".pi/agent/other")
-	binds = Materialize(Spec{Share: []string{"~/.pi/agent/other"}}, store, t.TempDir(), home, true, false, func(string) {})
+	binds = Materialize(Spec{Share: []string{"~/.pi/agent/other"}}, store, t.TempDir(), paths.Host{Home: home}, true, false, func(string) {})
 	if _, err := os.Stat(other); err == nil {
 		t.Error("dry-run created a share directory")
 	}
@@ -262,7 +270,7 @@ func TestMaterializeIsolatedSharesAreCopied(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(share, "s.jsonl"), []byte("x"), 0o644)
 	store := t.TempDir()
-	binds := Materialize(Spec{Share: []string{"~/.pi/agent/sessions"}}, store, t.TempDir(), home, false, true, func(string) {})
+	binds := Materialize(Spec{Share: []string{"~/.pi/agent/sessions"}}, store, t.TempDir(), paths.Host{Home: home}, false, true, func(string) {})
 	if len(binds) != 1 {
 		t.Fatalf("binds = %+v", binds)
 	}
@@ -280,7 +288,7 @@ func TestMaterializeIsolatedSharesAreCopied(t *testing.T) {
 func TestMaterializeCache(t *testing.T) {
 	home := testHome(t)
 	store, cacheRoot := t.TempDir(), t.TempDir()
-	binds := Materialize(Spec{Cache: []string{"~/.pi/agent/bin"}}, store, cacheRoot, home, false, false, func(string) {})
+	binds := Materialize(Spec{Cache: []string{"~/.pi/agent/bin"}}, store, cacheRoot, paths.Host{Home: home}, false, false, func(string) {})
 	if len(binds) != 1 {
 		t.Fatalf("binds = %+v", binds)
 	}
@@ -313,7 +321,7 @@ func TestMaterializeCopySkipsOverriddenChildren(t *testing.T) {
 		Share: []string{"~/.pi/agent/sessions"},
 		Cache: []string{"~/.pi/agent/bin"},
 	}
-	Materialize(spec, store, t.TempDir(), home, false, false, func(string) {})
+	Materialize(spec, store, t.TempDir(), paths.Host{Home: home}, false, false, func(string) {})
 	copied := filepath.Join(store, ".pi/agent")
 	if _, err := os.Stat(filepath.Join(copied, "sessions")); err == nil {
 		t.Error("session history was copied before being overridden")
@@ -323,5 +331,35 @@ func TestMaterializeCopySkipsOverriddenChildren(t *testing.T) {
 	}
 	if data, err := os.ReadFile(filepath.Join(copied, "settings.json")); err != nil || string(data) != "{}" {
 		t.Errorf("settings were not copied: %v", err)
+	}
+}
+
+func TestMaterializeRejectsBroadPaths(t *testing.T) {
+	home := testHome(t)
+	if err := os.Symlink("/", filepath.Join(home, "rootlink")); err != nil {
+		t.Fatal(err)
+	}
+	var warnings []string
+	warn := func(w string) { warnings = append(warnings, w) }
+	spec := Spec{
+		Share:    []string{"~", "~/.pi/../../.."},
+		Copy:     []string{"~"},
+		ReadOnly: []string{"/", "/etc"},
+		Private:  []string{"~"},
+		Cache:    []string{"~"},
+	}
+	binds := Materialize(spec, t.TempDir(), t.TempDir(), paths.Host{Home: home}, false, false, warn)
+	if len(binds) != 0 {
+		t.Errorf("broad paths were materialized: %+v", binds)
+	}
+	// A path that only resolves to a broad location through a symlink is
+	// rejected after resolution.
+	binds = Materialize(Spec{ReadOnly: []string{"~/rootlink"}}, t.TempDir(), t.TempDir(),
+		paths.Host{Home: home}, false, false, warn)
+	if len(binds) != 0 {
+		t.Errorf("a symlink to / was materialized: %+v", binds)
+	}
+	if !slices.ContainsFunc(warnings, func(w string) bool { return strings.Contains(w, "expose too much") }) {
+		t.Errorf("warnings = %q", warnings)
 	}
 }

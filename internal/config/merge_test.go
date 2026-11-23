@@ -236,6 +236,24 @@ func TestMergeSectionPathsFoldIntoAgent(t *testing.T) {
 	}
 }
 
+func TestMergeDoesNotMutateSection(t *testing.T) {
+	user := &File{
+		Sections: map[string]Section{
+			"go": {
+				Paths:  AgentPaths{Share: []string{"~/go"}},
+				Agents: map[string]AgentSection{"opencode": {}},
+			},
+		},
+	}
+	proj := &File{Include: []string{"go"}}
+	if _, err := Merge(user, proj, Overrides{}, "opencode", "/h", "/cwd", env(nil)); err != nil {
+		t.Fatal(err)
+	}
+	if got := user.Sections["go"].Agents["opencode"].Paths.Share; len(got) != 0 {
+		t.Errorf("Merge mutated the section's agent paths: %v", got)
+	}
+}
+
 func TestMergeAgentPathErrors(t *testing.T) {
 	user := &File{Agents: map[string]AgentSection{"pi": {Paths: AgentPaths{Share: []string{""}}}}}
 	if _, err := Merge(user, nil, Overrides{}, "pi", "/h", "/cwd", env(nil)); err == nil ||

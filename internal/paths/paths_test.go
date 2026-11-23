@@ -80,6 +80,12 @@ func TestIsBroad(t *testing.T) {
 }
 
 func TestContains(t *testing.T) {
+	if !Contains("/", "/") || !Contains("/", "/a/b") {
+		t.Error("Contains(/, absolute path) = false")
+	}
+	if Contains("/", "relative") {
+		t.Error("Contains(/, relative path) = true")
+	}
 	if !Contains("/a/b", "/a/b") {
 		t.Error("Contains(/a/b, /a/b) = false")
 	}

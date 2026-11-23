@@ -146,6 +146,10 @@ func TestFormatRedactsSecrets(t *testing.T) {
 	if strings.Contains(out, "eu-west-1") || strings.Contains(out, "=/s") {
 		t.Errorf("AWS_* and SSH_AUTH_SOCK not redacted: %q", out)
 	}
+	out = FormatCommand([]string{"api_key=s3cret", "aws_region=eu-west-1"}, nil)
+	if strings.Contains(out, "s3cret") || strings.Contains(out, "eu-west-1") {
+		t.Errorf("lowercase secret names not redacted: %q", out)
+	}
 }
 
 func TestFormatRedactsURLCredentials(t *testing.T) {

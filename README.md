@@ -29,7 +29,8 @@ plugins, build tools) a private view of the host:
 By default `kandor` shares the host's state the way the agent expects it:
 OpenCode shares its data directory (the session database and stored logins),
 and the other built-in agents have their state directories copied into the
-sandbox. Use `--isolated` (or `--profile NAME`) for a **sandbox-only
+sandbox (pi shares its installed extensions and releases, which are too large
+to copy). Use `--isolated` (or `--profile NAME`) for a **sandbox-only
 profile** under `~/.local/share/kandor/<profile>`: the host config is copied
 in once, so plugins and settings keep working, but stored credentials, host
 sessions and the host session database are not exposed.

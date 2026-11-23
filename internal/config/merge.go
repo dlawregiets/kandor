@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"sort"
@@ -154,6 +155,9 @@ func resolveLayers(user, project *File, agent string) ([]*File, error) {
 		applied[name] = true
 		layer := sec.layer()
 		if p := sec.Paths; len(p.Share)+len(p.Copy)+len(p.Private)+len(p.RO)+len(p.Cache) > 0 {
+			// Clone so folding the section's own paths into the running
+			// agent does not mutate the parsed configuration.
+			layer.Agents = maps.Clone(layer.Agents)
 			if layer.Agents == nil {
 				layer.Agents = map[string]AgentSection{}
 			}
