@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/dlawregiets/kandor/internal/config"
+	"github.com/dlawregiets/kandor/internal/sandbox"
 )
 
 func call(t *testing.T, args ...string) (int, string, string) {
@@ -139,6 +140,33 @@ func TestWritableMounts(t *testing.T) {
 	}
 	if w(filepath.Join(dir, "missing")) {
 		t.Error("an unmounted path is writable")
+	}
+}
+
+func TestConfirmReadOnlyProject(t *testing.T) {
+	project, _ := filepath.EvalSymlinks(t.TempDir())
+	plan := sandbox.NewPlan(sandbox.Features{})
+	plan.RW(project, project)
+	if err := confirmReadOnlyProject(plan, project, nil, strings.NewReader(""), &bytes.Buffer{}, false); err != nil {
+		t.Fatalf("a writable project prompted: %v", err)
+	}
+
+	plan.Bind(project, project, false)
+	var errb bytes.Buffer
+	if err := confirmReadOnlyProject(plan, project, nil, strings.NewReader("n\n"), &errb, false); err == nil {
+		t.Fatal("a read-only project started without confirmation")
+	}
+	for _, want := range []string{"mounted read-only", "[y/N]"} {
+		if !strings.Contains(errb.String(), want) {
+			t.Errorf("stderr is missing %q: %q", want, errb.String())
+		}
+	}
+	errb.Reset()
+	if err := confirmReadOnlyProject(plan, project, nil, strings.NewReader("y\n"), &errb, false); err != nil {
+		t.Fatalf("confirmation was not accepted: %v", err)
+	}
+	if err := confirmReadOnlyProject(plan, project, []config.MountSpec{{Path: project}}, strings.NewReader(""), &bytes.Buffer{}, false); err != nil {
+		t.Errorf("an explicit --ro prompted: %v", err)
 	}
 }
 

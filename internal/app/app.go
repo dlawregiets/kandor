@@ -3,6 +3,7 @@
 package app
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -283,6 +284,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err != nil {
 		return o.fail(err)
 	}
+	if err := confirmReadOnlyProject(p, s.ProjectDir, req.Overrides.Mounts, stdin, stderr, req.DryRun); err != nil {
+		return o.fail(err)
+	}
 
 	disableWorks := false
 	if !s.AllowUserns {
@@ -359,6 +363,38 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	code := guard.Child(argv, env)
 	sandbox.Audit(mounts.Git, s.ProjectDir, o.warn)
 	return code
+}
+
+// confirmReadOnlyProject warns and asks before starting when the planned
+// mounts make the project directory read-only.  A read-only mount given on
+// the command line is the caller's explicit choice and does not prompt.
+func confirmReadOnlyProject(p *sandbox.Plan, project string, cli []config.MountSpec, stdin io.Reader, stderr io.Writer, dryRun bool) error {
+	visible, writable := p.Visible(project)
+	if !visible || writable || mountsProject(cli, project) {
+		return nil
+	}
+	fmt.Fprintf(stderr, "kandor: warning: %s would be mounted read-only by configuration; the agent cannot write to it\n", project)
+	if dryRun {
+		return nil
+	}
+	fmt.Fprint(stderr, "kandor: continue anyway? [y/N] ")
+	sc := bufio.NewScanner(stdin)
+	if !sc.Scan() || !isYes(sc.Text()) {
+		return errors.New("aborted: the project directory would be read-only in the sandbox")
+	}
+	return nil
+}
+
+// mountsProject reports whether one of the mounts contains the project
+// directory (the last mount of a path decides, and command-line mounts come
+// last).
+func mountsProject(mounts []config.MountSpec, project string) bool {
+	for _, m := range mounts {
+		if resolved, err := paths.Resolve(m.Path); err == nil && paths.Contains(resolved, project) {
+			return true
+		}
+	}
+	return false
 }
 
 // profileScope namespaces isolated profiles per agent, except OpenCode's,
