@@ -30,6 +30,11 @@ type Spec struct {
 	// NodeCompileCache keeps Node's compile cache in a persistent
 	// kandor-owned directory instead of the ephemeral $TMPDIR.
 	NodeCompileCache bool
+	// PersistentScratch keeps the sandbox's TMPDIR in a persistent
+	// kandor-owned directory, so on-disk caches that live in TMPDIR (a
+	// module loader's transpiled sources, for one) survive between runs.
+	// Stale entries are pruned; see scratchKeep.
+	PersistentScratch bool
 }
 
 // builtinSpecs are the agents kandor knows without configuration.
@@ -72,9 +77,10 @@ var builtinSpecs = []Spec{
 			"~/.pi/agent/npm",
 			"~/.pi/agent/install",
 		},
-		Cache:            []string{"~/.pi/agent/bin"},
-		EnvExclude:       []string{"PI_"},
-		NodeCompileCache: true,
+		Cache:             []string{"~/.pi/agent/bin"},
+		EnvExclude:        []string{"PI_"},
+		NodeCompileCache:  true,
+		PersistentScratch: true,
 	},
 	{
 		// Probed against Copilot CLI 1.0.101 (copilot --help).  The user
@@ -201,7 +207,7 @@ func Materialize(spec Spec, storeRoot, cacheRoot string, host paths.Host, dryRun
 		}
 	}
 	copyInto := func(resolved string) {
-		store := filepath.Join(storeRoot, storeRel(resolved, home))
+		store := storeDir(storeRoot, resolved, home, dryRun)
 		if _, err := os.Lstat(store); err != nil && !dryRun {
 			if err := copyTreeSkip(resolved, store, overridden); err != nil {
 				warn(fmt.Sprintf("cannot copy %s into the profile: %v", resolved, err))
@@ -262,7 +268,7 @@ func Materialize(spec Spec, storeRoot, cacheRoot string, host paths.Host, dryRun
 		if !resolvedOK(raw, resolved) {
 			continue
 		}
-		store := filepath.Join(storeRoot, storeRel(resolved, home))
+		store := storeDir(storeRoot, resolved, home, dryRun)
 		if !dryRun {
 			if err := os.MkdirAll(store, 0o755); err != nil {
 				warn(fmt.Sprintf("cannot create the profile directory for %s: %v", resolved, err))
@@ -280,7 +286,7 @@ func Materialize(spec Spec, storeRoot, cacheRoot string, host paths.Host, dryRun
 		if !resolvedOK(raw, resolved) {
 			continue
 		}
-		dir := filepath.Join(cacheRoot, storeRel(resolved, home))
+		dir := storeDir(cacheRoot, resolved, home, dryRun)
 		if !dryRun {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				warn(fmt.Sprintf("cannot create the cache for %s: %v", resolved, err))
@@ -305,10 +311,44 @@ func pathDepth(p string) int {
 
 // storeRel maps a host path into the profile store: paths under home keep
 // their relative form, others are flattened with an "abs" prefix.
+// The flattening percent-encodes "%" and "/" so it is injective:
+// "/etc/foo" and "/etc_foo" must not collide in the store.
 func storeRel(resolved, home string) string {
 	if rel, err := filepath.Rel(home, resolved); err == nil && rel != ".." &&
 		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return rel
+	}
+	return "abs" + strings.NewReplacer("%", "%25", "/", "%2F").Replace(resolved)
+}
+
+// storeDir is the store path for resolved under root, moving a store left
+// behind by the pre-percent-encoding name ("abs_etc_foo") to the current
+// one ("abs%2Fetc%2Ffoo") on first use, so existing state is kept instead
+// of being re-copied from the host.  A dry run plans the path but moves
+// nothing.
+func storeDir(root, resolved, home string, dryRun bool) string {
+	store := filepath.Join(root, storeRel(resolved, home))
+	if dryRun {
+		return store
+	}
+	if _, err := os.Lstat(store); err == nil {
+		return store
+	}
+	if legacy := legacyStoreRel(resolved, home); legacy != "" {
+		legacyPath := filepath.Join(root, legacy)
+		if _, err := os.Lstat(legacyPath); err == nil {
+			_ = os.Rename(legacyPath, store)
+		}
+	}
+	return store
+}
+
+// legacyStoreRel is the store name used before storeRel percent-encoded
+// its flattened form, or "" when the name is unchanged.
+func legacyStoreRel(resolved, home string) string {
+	if rel, err := filepath.Rel(home, resolved); err == nil && rel != ".." &&
+		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
 	}
 	return "abs" + strings.ReplaceAll(resolved, "/", "_")
 }

@@ -36,7 +36,7 @@ func Merge(user, project *File, o Overrides, agent, home, cwd string, getenv fun
 	if len(project.Sections) > 0 {
 		return Settings{}, fmt.Errorf("sections must be defined in the user configuration file, not the project one")
 	}
-	layers, err := resolveLayers(user, project, agent)
+	layers, projectFrom, err := resolveLayers(user, project, agent)
 	if err != nil {
 		return Settings{}, err
 	}
@@ -53,7 +53,7 @@ func Merge(user, project *File, o Overrides, agent, home, cwd string, getenv fun
 		Profile:        "default",
 	}
 
-	for _, l := range layers {
+	for i, l := range layers {
 		set(&s.Network, l.Sandbox.Network)
 		set(&s.AllowUserns, l.Sandbox.AllowUserns)
 		set(&s.NewSession, l.Sandbox.NewSession)
@@ -78,16 +78,18 @@ func Merge(user, project *File, o Overrides, agent, home, cwd string, getenv fun
 		if err != nil {
 			return Settings{}, err
 		}
+		markExplicit(mounts, i >= projectFrom)
 		s.Mounts = append(s.Mounts, mounts...)
 		s.Env = append(s.Env, envSpecs(l.Env.Pass, l.Env.Set)...)
 	}
 
-	for _, l := range layers {
+	for i, l := range layers {
 		a := l.Agents[agent]
 		mounts, err := expandLayer(lists(a.Mounts), home)
 		if err != nil {
 			return Settings{}, err
 		}
+		markExplicit(mounts, i >= projectFrom)
 		s.Mounts = append(s.Mounts, mounts...)
 		s.Env = append(s.Env, envSpecs(a.Env.Pass, a.Env.Set)...)
 		// An empty binary selects nothing; only a real path overrides.
@@ -127,6 +129,7 @@ func Merge(user, project *File, o Overrides, agent, home, cwd string, getenv fun
 	if err != nil {
 		return Settings{}, err
 	}
+	markExplicit(cliMounts, true)
 	s.Mounts = append(s.Mounts, cliMounts...)
 	s.Env = append(s.Env, o.Env...)
 
@@ -138,10 +141,11 @@ func Merge(user, project *File, o Overrides, agent, home, cwd string, getenv fun
 
 // resolveLayers orders the file layers: the user file, its "default"
 // section, its included sections, the project file's included sections and
-// the project file itself.  Each named section applies at most once.  A
+// the project file itself.  It returns the index of the first layer that the
+// project file pulls in.  Each named section applies at most once.  A
 // section's own Paths apply to the agent being run, folded into its agent
 // entry for that layer.
-func resolveLayers(user, project *File, agent string) ([]*File, error) {
+func resolveLayers(user, project *File, agent string) ([]*File, int, error) {
 	layers := []*File{user}
 	applied := map[string]bool{}
 	apply := func(name, where string) error {
@@ -174,20 +178,21 @@ func resolveLayers(user, project *File, agent string) ([]*File, error) {
 	}
 	if _, ok := user.Sections["default"]; ok {
 		if err := apply("default", "user file's"); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 	for _, name := range user.Include {
 		if err := apply(name, "user file's"); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
+	projectFrom := len(layers)
 	for _, name := range project.Include {
 		if err := apply(name, "project file's"); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
-	return append(layers, project), nil
+	return append(layers, project), projectFrom, nil
 }
 
 // set applies the file value, then the command-line value, when present.
@@ -218,6 +223,17 @@ func lists(m MountLists) []MountSpec {
 		out = append(out, MountSpec{Path: p, Writable: true})
 	}
 	return out
+}
+
+// markExplicit tags mounts the project file or the command line asked for
+// itself, which may make the project read-only.
+func markExplicit(mounts []MountSpec, explicit bool) {
+	if !explicit {
+		return
+	}
+	for i := range mounts {
+		mounts[i].Explicit = true
+	}
 }
 
 // expandLayer expands paths and rejects a path that one layer asks for both

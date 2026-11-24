@@ -25,6 +25,32 @@ var opencodeSubcommands = []string{
 
 func (opencode) IsSubcommand(arg string) bool { return slices.Contains(opencodeSubcommands, arg) }
 
+// opencodeBoolFlags are the top-level flags that take no value (from
+// `opencode --help`). Every other flag consumes the next token as its
+// value, or carries it after "=".
+var opencodeBoolFlags = map[string]bool{
+	"--standalone": true, "--auto": true, "--continue": true, "-c": true,
+	"--wizard": true, "--print-logs": true, "--help": true, "-h": true,
+	"--version": true, "-v": true,
+}
+
+// firstPositional returns the index of the first token in flags[from:]
+// that is a positional argument rather than a flag or a flag's value, or
+// -1 when there is none.
+func firstPositional(flags []string, from int) int {
+	for i := from; i < len(flags); i++ {
+		a := flags[i]
+		if a == "" || a == "-" || a[0] != '-' {
+			return i
+		}
+		if strings.Contains(a, "=") || opencodeBoolFlags[a] {
+			continue
+		}
+		i++ // skip this flag's value
+	}
+	return -1
+}
+
 // The host's OpenCode service and session variables must not leak in.
 var opencodeExcluded = []string{
 	"OPENCODE", "OPENCODE_SESSION_ID", "OPENCODE_CLIENT", "OPENCODE_TERMINAL",
@@ -51,12 +77,16 @@ func (opencode) Command(bin string, args []string) ([]string, error) {
 		flags = args[:i]
 	}
 
+	// The subcommand is the first positional token, where a global flag's
+	// value ("--port 9999") is not positional: it must not be mistaken for
+	// the subcommand, and a value that reads like one ("--data-dir run")
+	// must not be treated as it.
+	subIdx := firstPositional(flags, 0)
 	first := ""
-	for _, a := range flags {
-		if a == "" || a[0] != '-' {
-			first = a
-			break
-		}
+	if subIdx >= 0 && slices.Contains(opencodeSubcommands, flags[subIdx]) {
+		first = flags[subIdx]
+	} else {
+		subIdx = -1
 	}
 	switch first {
 	case "service":
@@ -85,24 +115,26 @@ func (opencode) Command(bin string, args []string) ([]string, error) {
 		return append(cmd, args...), nil
 	}
 
-	switch sub := args[0]; sub {
+	switch sub := first; sub {
 	case "completions", "debug", "mcp", "plugin", "serve", "acp":
 		// These either do not use a server or start their own.
 		return append(cmd, args...), nil
 	case "auth", "session":
 		// A nested subcommand such as "auth list" or "session export".
-		for i := 1; i < len(args); i++ {
-			if args[i] == "" || args[i][0] != '-' {
-				cmd = append(cmd, sub, args[i], "--standalone")
-				cmd = append(cmd, args[1:i]...)
+		for i := subIdx + 1; i < len(flags); i++ {
+			if flags[i] == "" || flags[i][0] != '-' {
+				cmd = append(cmd, args[:subIdx+1]...)
+				cmd = append(cmd, args[i], "--standalone")
+				cmd = append(cmd, args[subIdx+1:i]...)
 				return append(cmd, args[i+1:]...), nil
 			}
 		}
 		// Bare "auth" or "session" prints help; no server is involved.
 		return append(cmd, args...), nil
 	case "run", "api", "models", "stats", "mini", "reload":
-		cmd = append(cmd, sub, "--standalone")
-		return append(cmd, args[1:]...), nil
+		cmd = append(cmd, args[:subIdx+1]...)
+		cmd = append(cmd, "--standalone")
+		return append(cmd, args[subIdx+1:]...), nil
 	}
 	// No subcommand: the TUI, where --standalone is a top-level flag.
 	cmd = append(cmd, "--standalone")

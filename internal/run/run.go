@@ -72,8 +72,9 @@ func DisableUsernsWorks(f sandbox.Features) bool {
 	return f.DisableUserns && quiet("--ro-bind", "/", "/", "--unshare-user", "--disable-userns", "--", "/bin/true") == nil
 }
 
-// The signals kandor handles.  SIGINT and SIGQUIT come from the terminal
-// and also reach the sandbox; SIGTERM and SIGHUP are forwarded to it.
+// The signals kandor handles and forwards to the sandbox. Forwarding
+// SIGINT/SIGQUIT (not just relying on terminal delivery to the process
+// group) also covers a signal sent directly to kandor's own PID.
 var handled = []os.Signal{syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP}
 
 // Guard catches signals from before the sandbox starts until kandor has
@@ -123,10 +124,11 @@ func Child(argv, env []string) int {
 
 // Child runs argv with kandor's standard streams and exactly the
 // environment env (kandor's own when env is nil), and returns its exit
-// status (128 + n if it was killed by signal n).  While it runs, SIGINT and
-// SIGQUIT are left to the child (the terminal delivers them to it), and
-// SIGTERM and SIGHUP are forwarded to it, so kandor outlives the sandbox and
-// can clean up.
+// status (128 + n if it was killed by signal n). While it runs, every
+// handled signal is forwarded to the child, so kandor outlives the sandbox
+// and can clean up. A terminal SIGINT/SIGQUIT may reach the child twice
+// (once from the terminal, once forwarded); that is preferable to
+// swallowing a signal sent only to kandor.
 func (g *Guard) Child(argv, env []string) int {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = env
@@ -141,9 +143,7 @@ func (g *Guard) Child(argv, env []string) int {
 		for {
 			select {
 			case sig := <-g.ch:
-				if sig == syscall.SIGTERM || sig == syscall.SIGHUP {
-					cmd.Process.Signal(sig)
-				}
+				cmd.Process.Signal(sig)
 			case <-done:
 				return
 			}

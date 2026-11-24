@@ -32,9 +32,11 @@ For safety, `--ro` and `--rw` refuse `/`, `$HOME`, ancestors of `$HOME`,
 `/run/user/$UID`, and top-level host directories such as `/tmp`, `/etc` or
 `/usr`. Mount a subdirectory or file instead (for example `--rw ~/go`).
 
-If a configured mount would make the project directory read-only, `kandor`
-warns and asks for confirmation before starting the sandbox. An explicit
-`--ro` of the project directory skips the prompt.
+A `read_only` entry for the project directory itself in the user
+configuration is ignored: the project is always mounted read-write. Only the
+project file or the command line can make it read-only; then `kandor` warns
+and asks for confirmation before starting the sandbox. An explicit `--ro` of
+the project directory skips the prompt.
 
 ### Configuration file
 

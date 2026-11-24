@@ -168,7 +168,10 @@ func validWorktree(project, common string) bool {
 		return false
 	}
 	if !filepath.IsAbs(back) {
-		back = filepath.Join(project, back)
+		// Relative to the per-worktree directory holding this file, not
+		// to the project (which is where the .git file's gitdir: is
+		// relative to, above).
+		back = filepath.Join(perWT, back)
 	}
 	back, err = paths.Resolve(back)
 	if err != nil {

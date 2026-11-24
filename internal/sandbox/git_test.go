@@ -185,6 +185,26 @@ func TestGitWorktreeAccepted(t *testing.T) {
 	}
 }
 
+func TestGitWorktreeRelativeBackRef(t *testing.T) {
+	requireGit(t)
+	e := newEnv(t)
+	main := filepath.Join(e.home, "main")
+	os.MkdirAll(main, 0o755)
+	git(t, main, "init", "-q")
+	git(t, main, "commit", "-q", "--allow-empty", "-m", "init")
+	wt := filepath.Join(e.home, "code", "wt")
+	git(t, main, "worktree", "add", "-q", wt, "-b", "b")
+	// The back-reference is relative to the per-worktree directory
+	// (main/.git/worktrees/wt), not to the project.
+	perWT := main + "/.git/worktrees/wt"
+	os.WriteFile(filepath.Join(perWT, "gitdir"), []byte("../../../../code/wt/.git\n"), 0o644)
+	e.project, e.in.Settings.ProjectDir = wt, wt
+	_, g := e.discover(t, true)
+	if !g.Trusted {
+		t.Errorf("worktree with relative back-reference not trusted: %+v", g)
+	}
+}
+
 func TestGitForgedWorktreeRefused(t *testing.T) {
 	requireGit(t)
 	e := newEnv(t)

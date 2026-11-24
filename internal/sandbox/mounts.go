@@ -232,6 +232,16 @@ func BuildMounts(p *Plan, in Input) (Result, error) {
 
 	// Explicit extra mounts, in layer order so a later one wins.
 	for _, m := range s.Mounts {
+		// A configured read-only mount of the project itself would lock the
+		// agent out; it is ignored unless the project file or the command
+		// line asked for it, and unless the path is empty (Resolve would
+		// turn "" into the working directory).  The project is already
+		// mounted read-write above.
+		if !m.Writable && !m.Explicit && m.Path != "" {
+			if resolved, err := paths.Resolve(m.Path); err == nil && resolved == project {
+				continue
+			}
+		}
 		if err := extraMount(p, h, m); err != nil {
 			return Result{}, err
 		}
@@ -287,6 +297,11 @@ func mask(p *Plan, m agent.Mask, dryRun bool) error {
 // /bin are already visible through the read-only root.
 func mountBinaryDir(p *Plan, in Input, homeParent string) error {
 	dir := filepath.Dir(in.Binary)
+	// The project is already mounted read-write, so a binary directly in
+	// it is already visible; mounting its directory again would be a no-op.
+	if dir == in.Settings.ProjectDir {
+		return nil
+	}
 	refuse := fmt.Errorf("refusing to mount the binary's directory '%s'; move the binary into its own directory (or point KANDOR_BIN at one)", dir)
 	switch dir {
 	case "/tmp", "/var/tmp", "/run", "/mnt", "/media", "/srv", "/root", homeParent:
@@ -308,7 +323,7 @@ func extraMount(p *Plan, h paths.Host, m config.MountSpec) error {
 		kind = "rw"
 	}
 	if m.Path == "" {
-		return nil
+		return fmt.Errorf("%s mount path is empty", kind)
 	}
 	if !exists(m.Path) {
 		return fmt.Errorf("%s path does not exist: %s", kind, m.Path)

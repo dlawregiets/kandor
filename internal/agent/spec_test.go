@@ -112,7 +112,7 @@ func TestMaterializeModes(t *testing.T) {
 	mustBind(filepath.Join(home, ".claude"), filepath.Join(store, ".claude"), true)
 	mustBind(filepath.Join(home, ".claude.json"), filepath.Join(store, ".claude.json"), true)
 	mustBind(filepath.Join(home, ".pi"), filepath.Join(store, ".pi"), true)
-	mustBind("/nowhere/private-dir", filepath.Join(store, "abs_nowhere_private-dir"), true)
+	mustBind("/nowhere/private-dir", filepath.Join(store, "abs%2Fnowhere%2Fprivate-dir"), true)
 	if len(warnings) != 5 {
 		t.Errorf("warnings = %v, want two share notices, two relative skips and one missing ro", warnings)
 	}
@@ -127,12 +127,49 @@ func TestMaterializeModes(t *testing.T) {
 	}
 }
 
+func TestStoreDirMigratesLegacyName(t *testing.T) {
+	storeRoot := t.TempDir()
+	legacy := filepath.Join(storeRoot, "abs_nowhere_private-dir")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "state"), []byte("kept"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := storeDir(storeRoot, "/nowhere/private-dir", "/h", false)
+	want := filepath.Join(storeRoot, "abs%2Fnowhere%2Fprivate-dir")
+	if got != want {
+		t.Fatalf("storeDir = %q, want %q", got, want)
+	}
+	if data, err := os.ReadFile(filepath.Join(want, "state")); err != nil || string(data) != "kept" {
+		t.Errorf("legacy state was not moved: %q, %v", data, err)
+	}
+	if _, err := os.Lstat(legacy); !os.IsNotExist(err) {
+		t.Errorf("legacy store left behind: %v", err)
+	}
+	// A store already under the new name is left alone, and a dry run moves
+	// nothing.
+	legacy2 := filepath.Join(storeRoot, "abs_opt_x")
+	if err := os.MkdirAll(legacy2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := storeDir(storeRoot, "/opt/x", "/h", true); got != filepath.Join(storeRoot, "abs%2Fopt%2Fx") {
+		t.Errorf("dry-run storeDir = %q", got)
+	}
+	if _, err := os.Lstat(legacy2); err != nil {
+		t.Errorf("dry run moved the legacy store: %v", err)
+	}
+}
+
 func TestStoreRel(t *testing.T) {
 	if got := storeRel("/h/.claude", "/h"); got != ".claude" {
 		t.Errorf("storeRel = %q", got)
 	}
-	if got := storeRel("/opt/x", "/h"); got != "abs_opt_x" {
+	if got := storeRel("/opt/x", "/h"); got != "abs%2Fopt%2Fx" {
 		t.Errorf("storeRel = %q", got)
+	}
+	if storeRel("/etc/foo", "/h") == storeRel("/etc_foo", "/h") {
+		t.Errorf("storeRel collides for /etc/foo and /etc_foo")
 	}
 	if got := storeRel("/h", "/h"); got != "." {
 		t.Errorf("storeRel = %q", got)

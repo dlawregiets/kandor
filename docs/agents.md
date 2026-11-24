@@ -72,6 +72,12 @@ built-in descriptor:
 - points Node's compile cache at a kandor-owned persistent directory instead
   of the sandbox's ephemeral `/tmp`, which otherwise makes every run pay a
   cold-start compile (about 100 ms on `pi --version` alone);
+- keeps the sandbox's `TMPDIR` in a kandor-owned persistent directory
+  (`~/.cache/kandor/pi/tmp`). pi's extensions are TypeScript and prebuilt
+  bundles loaded through a runtime transpiler whose on-disk cache lives in
+  `TMPDIR`, so with the ephemeral `/tmp` every start re-transpiled the whole
+  extension set (about 12 s for the dozen installed ones); a warm cache
+  starts in about 4 s. Entries untouched for 14 days are pruned;
 - keeps host `PI_*` variables out (`PI_OFFLINE` and friends would otherwise
   point at host state).
 

@@ -58,6 +58,18 @@ func TestGuardForwardsTerm(t *testing.T) {
 
 // A signal that arrives before the sandbox starts is reported, so kandor can
 // clean up and exit instead of dying with its temporary files in place.
+func TestGuardForwardsInt(t *testing.T) {
+	g := NewGuard()
+	defer g.Stop()
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		syscall.Kill(os.Getpid(), syscall.SIGINT)
+	}()
+	if code := g.Child([]string{"sh", "-c", "sleep 5"}, nil); code != 130 {
+		t.Errorf("exit code = %d, want 130", code)
+	}
+}
+
 func TestGuardPendingBeforeChild(t *testing.T) {
 	g := NewGuard()
 	defer g.Stop()

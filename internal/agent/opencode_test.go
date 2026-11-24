@@ -75,6 +75,25 @@ func TestCommandSeparatorIsPositional(t *testing.T) {
 	wantCmd(t, command(t, "--", "pair"), "/bin/oc", "--standalone", "--", "pair")
 }
 
+func TestCommandGlobalFlagBeforeSubcommand(t *testing.T) {
+	wantCmd(t, command(t, "--data-dir", "/tmp/x", "run", "hi"), "/bin/oc", "--data-dir", "/tmp/x", "run", "--standalone", "hi")
+	wantCmd(t, command(t, "--data-dir", "/tmp/x", "auth", "login"), "/bin/oc", "--data-dir", "/tmp/x", "auth", "login", "--standalone")
+	if _, err := OpenCode.Command("/bin/oc", []string{"--port", "9999", "service", "start"}); err == nil || !strings.Contains(err.Error(), "refusing to run 'opencode service'") {
+		t.Errorf("service after global flag not refused: %v", err)
+	}
+}
+
+// A flag value that reads like a subcommand is a value, not the subcommand.
+func TestCommandFlagValueIsNotSubcommand(t *testing.T) {
+	wantCmd(t, command(t, "--data-dir", "run"), "/bin/oc", "--standalone", "--data-dir", "run")
+	wantCmd(t, command(t, "--data-dir", "service"), "/bin/oc", "--standalone", "--data-dir", "service")
+	wantCmd(t, command(t, "--data-dir", "run", "run", "hi"), "/bin/oc", "--data-dir", "run", "run", "--standalone", "hi")
+	wantCmd(t, command(t, "--model", "run", "run", "hi"), "/bin/oc", "--model", "run", "run", "--standalone", "hi")
+	// A boolean flag takes no value, so the next token is the subcommand.
+	wantCmd(t, command(t, "--auto", "run", "hi"), "/bin/oc", "--auto", "run", "--standalone", "hi")
+	wantCmd(t, command(t, "--data-dir=run", "run", "hi"), "/bin/oc", "--data-dir=run", "run", "--standalone", "hi")
+}
+
 func TestSubcommandsAndExclusions(t *testing.T) {
 	if !OpenCode.IsSubcommand("run") || !OpenCode.IsSubcommand("completions") || OpenCode.IsSubcommand("src") {
 		t.Error("IsSubcommand wrong")

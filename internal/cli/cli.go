@@ -95,6 +95,21 @@ func options(r *Request) map[string]option {
 	}
 }
 
+// lookup finds the option for arg, accepting the --opt=value form for
+// options that take a value. It returns the option, the option name, the
+// inline value ("" when there is no "="), and whether a "=" was present.
+func lookup(arg string, opts map[string]option) (option, string, string, bool, bool) {
+	if opt, ok := opts[arg]; ok {
+		return opt, arg, "", false, true
+	}
+	if name, value, has := strings.Cut(arg, "="); has {
+		if opt, ok := opts[name]; ok {
+			return opt, name, value, true, true
+		}
+	}
+	return option{}, arg, "", false, false
+}
+
 // OptionKeys maps each option to the configuration key it sets ("" for
 // options that are not settings).
 func OptionKeys() map[string]string {
@@ -117,20 +132,23 @@ func AgentArg(args []string) string {
 		if arg == "--" {
 			break
 		}
-		if arg == "--agent" {
+		opt, name, inline, hasInline, known := lookup(arg, opts)
+		if known && name == "--agent" {
+			if hasInline {
+				return inline
+			}
 			if i+1 < len(args) {
 				return args[i+1]
 			}
 			return ""
 		}
-		opt, known := opts[arg]
 		if !known {
 			if !strings.HasPrefix(arg, "-") && isDir(arg) {
 				continue
 			}
 			break
 		}
-		if opt.missing != "" {
+		if opt.missing != "" && !hasInline {
 			i++
 		}
 	}
@@ -150,14 +168,14 @@ func execIndex(args []string, opts map[string]option) (int, bool) {
 		if arg == "exec" {
 			return i, true
 		}
-		opt, known := opts[arg]
+		opt, _, _, hasInline, known := lookup(arg, opts)
 		if !known {
 			if !strings.HasPrefix(arg, "-") && isDir(arg) {
 				continue
 			}
 			return -1, false
 		}
-		if opt.missing != "" {
+		if opt.missing != "" && !hasInline {
 			if i+1 >= len(args) {
 				return -1, false
 			}
@@ -205,7 +223,7 @@ func parseInto(r *Request, opts map[string]option, args []string, isSubcommand f
 			r.AgentArgs = append(r.AgentArgs, args[i+1:]...)
 			break
 		}
-		opt, known := opts[arg]
+		opt, name, inline, hasInline, known := lookup(arg, opts)
 		if !known {
 			if !strings.HasPrefix(arg, "-") && !isSubcommand(arg) && isDir(arg) {
 				r.Overrides.ProjectDir = arg
@@ -214,17 +232,30 @@ func parseInto(r *Request, opts map[string]option, args []string, isSubcommand f
 			r.AgentArgs = append(r.AgentArgs, args[i:]...)
 			break
 		}
+		if opt.missing == "" && hasInline {
+			return errors.New(name + " does not take a value")
+		}
 		value := ""
 		if opt.missing != "" {
-			if i+1 >= len(args) {
+			if hasInline {
+				if inline == "" {
+					msg := opt.missing
+					if !strings.HasPrefix(msg, "-") {
+						msg = name + " " + msg
+					}
+					return errors.New(msg)
+				}
+				value = inline
+			} else if i+1 >= len(args) {
 				msg := opt.missing
 				if !strings.HasPrefix(msg, "-") {
-					msg = arg + " " + msg
+					msg = name + " " + msg
 				}
 				return errors.New(msg)
+			} else {
+				i++
+				value = args[i]
 			}
-			i++
-			value = args[i]
 		}
 		opt.apply(r, value)
 		if r.Help || r.Version {

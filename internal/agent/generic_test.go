@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/dlawregiets/kandor/internal/config"
 )
@@ -95,11 +96,8 @@ func TestGenericPrepareNodeCompileCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(layout.HostCache, "kandor", "pi", "node-compile-cache")
-	if len(state.Binds) != 1 || state.Binds[0].Src != dir || !state.Binds[0].Writable {
-		t.Errorf("binds = %+v", state.Binds)
-	}
-	if len(state.Env) != 1 || state.Env[0].Name != "NODE_COMPILE_CACHE" || state.Env[0].Value != dir {
-		t.Errorf("env = %+v", state.Env)
+	if !hasBind(state.Binds, dir) || !hasEnv(state.Env, "NODE_COMPILE_CACHE", dir) {
+		t.Errorf("state = %+v", state)
 	}
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		t.Errorf("cache directory was not created: %v", err)
@@ -109,4 +107,89 @@ func TestGenericPrepareNodeCompileCache(t *testing.T) {
 	if len(state.Binds) != 0 || len(state.Env) != 0 {
 		t.Errorf("copilot got a compile cache: %+v", state)
 	}
+}
+
+func TestGenericPrepareScratchDir(t *testing.T) {
+	layout := Layout{HostCache: t.TempDir()}
+	dir := filepath.Join(layout.HostCache, "kandor", "pi", "tmp")
+	// A leftover from an old run goes; a fresh one stays.
+	stale := filepath.Join(dir, "stale-entry")
+	fresh := filepath.Join(dir, "fresh-entry")
+	for _, p := range []string{stale, fresh} {
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-2 * scratchKeep)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	// An old directory whose contents were rewritten recently stays:
+	// rewriting a file does not update the directory's mod-time.
+	rewritten := filepath.Join(dir, "rewritten-entry")
+	if err := os.MkdirAll(rewritten, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rewritten, "cache"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(rewritten, old, old); err != nil {
+		t.Fatal(err)
+	}
+	// An old directory with only old contents goes.
+	oldOnly := filepath.Join(dir, "old-only-entry")
+	if err := os.MkdirAll(oldOnly, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldOnly, "cache"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(oldOnly, "cache"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(oldOnly, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := For("pi", config.AgentSection{}).Prepare(layout, func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasBind(state.Binds, dir) || !hasEnv(state.Env, "TMPDIR", dir) {
+		t.Errorf("state = %+v", state)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("stale scratch entry survived: %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("fresh scratch entry was removed: %v", err)
+	}
+	if _, err := os.Stat(rewritten); err != nil {
+		t.Errorf("recently rewritten scratch entry was removed: %v", err)
+	}
+	if _, err := os.Stat(oldOnly); !os.IsNotExist(err) {
+		t.Errorf("old scratch entry with old contents survived: %v", err)
+	}
+
+	// A dry run plans the same directory without creating it.
+	dry := Layout{HostCache: t.TempDir(), DryRun: true}
+	state, err = For("pi", config.AgentSection{}).Prepare(dry, func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	planned := filepath.Join(dry.HostCache, "kandor", "pi", "tmp")
+	if !hasBind(state.Binds, planned) || !hasEnv(state.Env, "TMPDIR", planned) {
+		t.Errorf("dry-run state = %+v", state)
+	}
+	if _, err := os.Stat(filepath.Join(dry.HostCache, "kandor")); !os.IsNotExist(err) {
+		t.Errorf("dry run created %s", filepath.Join(dry.HostCache, "kandor"))
+	}
+}
+
+func hasBind(binds []Bind, dir string) bool {
+	return slices.ContainsFunc(binds, func(b Bind) bool { return b.Src == dir && b.Dest == dir && b.Writable })
+}
+
+func hasEnv(vars []EnvVar, name, value string) bool {
+	return slices.ContainsFunc(vars, func(v EnvVar) bool { return v.Name == name && v.Value == value })
 }

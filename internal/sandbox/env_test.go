@@ -127,6 +127,18 @@ func TestEnvInvalidName(t *testing.T) {
 	}
 }
 
+func TestEnvInvalidNameWithoutValue(t *testing.T) {
+	in, _ := envInput()
+	in.Extra = []config.EnvSpec{{Name: "BAD-NAME"}}
+	if _, err := Environment(in); err == nil || err.Error() != "invalid environment variable name: BAD-NAME" {
+		t.Errorf("err = %v", err)
+	}
+	in.Extra = []config.EnvSpec{{Name: ""}}
+	if _, err := Environment(in); err == nil {
+		t.Error("empty env name was accepted")
+	}
+}
+
 func TestEnvAllowlistSorted(t *testing.T) {
 	in, _ := envInput("OPENAI_B=2", "ANTHROPIC_A=1")
 	vars, _ := Environment(in)

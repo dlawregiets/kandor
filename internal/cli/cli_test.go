@@ -231,3 +231,28 @@ func TestParseExec(t *testing.T) {
 		t.Errorf("-C exec dir: %+v", r)
 	}
 }
+
+func TestParseEqualsForm(t *testing.T) {
+	d := t.TempDir()
+	r := parse(t, "--agent=pi", "--dir="+d, "--ro=a", "--rw=b", "--env=A=1", "--profile=w")
+	if r.Agent != "pi" || r.Overrides.ProjectDir != d || r.Overrides.Profile != "w" {
+		t.Errorf("equals form: %+v", r)
+	}
+	want := []config.MountSpec{{Path: "a"}, {Path: "b", Writable: true}}
+	if !reflect.DeepEqual(r.Overrides.Mounts, want) || !reflect.DeepEqual(r.Overrides.Env, []config.EnvSpec{{Name: "A", Value: "1", HasValue: true}}) {
+		t.Errorf("equals mounts/env: %+v", r.Overrides)
+	}
+	if got := AgentArg([]string{"--agent=pi", "run"}); got != "pi" {
+		t.Errorf("AgentArg(--agent=pi) = %q", got)
+	}
+	// Unknown options with "=" still pass through to the agent.
+	if r := parse(t, "--model=foo"); !slices.Equal(r.AgentArgs, []string{"--model=foo"}) {
+		t.Errorf("unknown --model=foo: %+v", r)
+	}
+	if _, err := Parse([]string{"--no-net=true"}, isSub); err == nil {
+		t.Error("flag with =value was accepted")
+	}
+	if _, err := Parse([]string{"--agent="}, isSub); err == nil {
+		t.Error("empty --agent= was accepted")
+	}
+}

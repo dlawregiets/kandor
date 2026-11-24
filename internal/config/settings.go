@@ -5,6 +5,9 @@ package config
 type MountSpec struct {
 	Path     string
 	Writable bool
+	// Explicit marks a mount from the project file or the command line.  A
+	// read-only mount of the project itself is honored only when explicit.
+	Explicit bool
 }
 
 // EnvSpec is one environment variable to pass into the sandbox.  HasValue

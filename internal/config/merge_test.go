@@ -70,7 +70,28 @@ func TestMergeMountOrder(t *testing.T) {
 		Agents: map[string]AgentSection{"opencode": {Mounts: MountLists{ReadOnly: []string{"~/c"}}}},
 	}
 	s := merge(t, f, Overrides{Mounts: []MountSpec{{Path: "~/a", Writable: true}}}, nil)
-	want := []MountSpec{{"/h/a", false}, {"/h/b", true}, {"/h/c", false}, {"/h/a", true}}
+	want := []MountSpec{{Path: "/h/a"}, {Path: "/h/b", Writable: true}, {Path: "/h/c"}, {Path: "/h/a", Writable: true, Explicit: true}}
+	if !reflect.DeepEqual(s.Mounts, want) {
+		t.Errorf("Mounts = %+v, want %+v", s.Mounts, want)
+	}
+}
+
+func TestMergeMountExplicit(t *testing.T) {
+	user := &File{
+		Mounts:   MountLists{ReadOnly: []string{"/p"}},
+		Sections: map[string]Section{"s": {Mounts: MountLists{ReadOnly: []string{"/s"}}}},
+	}
+	proj := &File{
+		Mounts:  MountLists{ReadOnly: []string{"/p"}},
+		Include: []string{"s"},
+	}
+	s := mergeProj(t, user, proj, Overrides{Mounts: []MountSpec{{Path: "/p"}}}, nil)
+	want := []MountSpec{
+		{Path: "/p"},
+		{Path: "/s", Explicit: true},
+		{Path: "/p", Explicit: true},
+		{Path: "/p", Explicit: true},
+	}
 	if !reflect.DeepEqual(s.Mounts, want) {
 		t.Errorf("Mounts = %+v, want %+v", s.Mounts, want)
 	}

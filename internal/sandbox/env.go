@@ -130,8 +130,8 @@ func Environment(in EnvInput) ([]agent.EnvVar, error) {
 		vars = append(vars, agent.EnvVar{Name: "GIT_CONFIG_GLOBAL", Value: in.GitConfigGlobal})
 	}
 	for _, spec := range in.Extra {
-		if spec.Name == "" {
-			continue
+		if !validEnvName.MatchString(spec.Name) {
+			return nil, fmt.Errorf("invalid environment variable name: %s", spec.Name)
 		}
 		value := spec.Value
 		if !spec.HasValue {
@@ -141,9 +141,6 @@ func Environment(in EnvInput) ([]agent.EnvVar, error) {
 				continue
 			}
 			value = v
-		}
-		if !validEnvName.MatchString(spec.Name) {
-			return nil, fmt.Errorf("invalid environment variable name: %s", spec.Name)
 		}
 		vars = append(vars, agent.EnvVar{Name: spec.Name, Value: value})
 	}

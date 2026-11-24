@@ -179,6 +179,24 @@ func TestMountsSettingsOrder(t *testing.T) {
 	}
 }
 
+func TestMountsProjectReadOnlyIgnored(t *testing.T) {
+	e := newEnv(t)
+	e.in.Settings.Mounts = []config.MountSpec{{Path: e.project}}
+	args, _ := e.build(t)
+	if hasSeq(args, "--ro-bind", e.project, e.project) {
+		t.Error("a configured read-only mount of the project was kept")
+	}
+	if !hasSeq(args, "--bind", e.project, e.project) {
+		t.Error("the project is not mounted read-write")
+	}
+
+	e.in.Settings.Mounts = []config.MountSpec{{Path: e.project, Explicit: true}}
+	args, _ = e.build(t)
+	if !hasSeq(args, "--ro-bind", e.project, e.project) {
+		t.Error("an explicit read-only mount of the project was ignored")
+	}
+}
+
 func TestMountsMissingPath(t *testing.T) {
 	e := newEnv(t)
 	missing := filepath.Join(e.home, "missing")
@@ -241,6 +259,29 @@ func TestMountsBinaryInHomeRefused(t *testing.T) {
 	e.in.Binary = "/bin/sh"
 	if args, _ := e.build(t); hasSeq(args, "--ro-bind", "/bin", "/bin") {
 		t.Error("top-level binary directory was mounted again")
+	}
+}
+
+func TestMountsBinaryInProject(t *testing.T) {
+	e := newEnv(t)
+	e.in.Binary = filepath.Join(e.project, "opencode")
+	args, _ := e.build(t)
+	if !hasSeq(args, "--bind", e.project, e.project) {
+		t.Errorf("project not mounted read-write: %q", args)
+	}
+}
+
+func TestMountsEmptyPath(t *testing.T) {
+	e := newEnv(t)
+	e.in.Settings.Mounts = []config.MountSpec{{Path: ""}}
+	if err := e.buildErr(t); err.Error() != "ro mount path is empty" {
+		t.Errorf("err = %q", err)
+	}
+	// Run from the project, where Resolve("") would land on the project:
+	// the empty path must still be an error, not silently ignored.
+	t.Chdir(e.project)
+	if err := e.buildErr(t); err.Error() != "ro mount path is empty" {
+		t.Errorf("err = %q", err)
 	}
 }
 
