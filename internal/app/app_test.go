@@ -79,6 +79,34 @@ func TestMainInitConfig(t *testing.T) {
 	}
 }
 
+func TestMainInitConfigAgent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "k", "config.toml")
+	t.Setenv("KANDOR_CONFIG", path)
+	code, _, errs := call(t, "--init-config", "--agent", "pi")
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errs)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), `default_agent = "pi"`) {
+		t.Errorf("--init-config --agent pi does not set default_agent:\n%s", content)
+	}
+}
+
+func TestMainInitConfigUnknownAgent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	t.Setenv("KANDOR_CONFIG", path)
+	code, _, errs := call(t, "--init-config", "--agent", "nope")
+	if code != 1 || !strings.Contains(errs, `unknown agent "nope"`) {
+		t.Errorf("code = %d, stderr = %q", code, errs)
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Error("--init-config wrote a config for an unknown agent")
+	}
+}
+
 func TestMainInitConfigNeedsHome(t *testing.T) {
 	t.Setenv("HOME", "")
 	t.Setenv("KANDOR_CONFIG", "")

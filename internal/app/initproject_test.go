@@ -2,6 +2,7 @@ package app
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -46,6 +47,52 @@ func TestMainInitProjectRefusesOverwrite(t *testing.T) {
 	}
 	if content, _ := os.ReadFile(existing); string(content) != "include = []\n" {
 		t.Error("--init-project overwrote an existing file")
+	}
+}
+
+func TestMainInitProjectAgent(t *testing.T) {
+	project := t.TempDir()
+	code, _, errs := initProjectCall(t, "", "", project, "--init-project", "--agent", "pi")
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, errs)
+	}
+	content, err := os.ReadFile(config.ProjectPath(project))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), `default_agent = "pi"`) {
+		t.Errorf("--init-project --agent pi does not set default_agent:\n%s", content)
+	}
+}
+
+func TestMainInitProjectGitignore(t *testing.T) {
+	for _, tc := range []struct {
+		name, before, want string
+	}{
+		{"missing", "", ".kandor.toml\n"},
+		{"no trailing newline", "*.log", "*.log\n.kandor.toml\n"},
+		{"trailing newline", "*.log\n", "*.log\n.kandor.toml\n"},
+		{"already listed", "bin/\n/.kandor.toml\n", "bin/\n/.kandor.toml\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			project := t.TempDir()
+			path := filepath.Join(project, ".gitignore")
+			if tc.before != "" {
+				if err := os.WriteFile(path, []byte(tc.before), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if code, _, errs := initProjectCall(t, "", "", project, "--init-project"); code != 0 {
+				t.Fatalf("code = %d, stderr = %q", code, errs)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.want {
+				t.Errorf(".gitignore = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

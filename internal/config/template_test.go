@@ -9,7 +9,7 @@ import (
 )
 
 func TestTemplateLoadsAsEmpty(t *testing.T) {
-	f, err := Load(writeFile(t, Template()))
+	f, err := Load(writeFile(t, Template("")))
 	if err != nil {
 		t.Fatalf("Load(Template()) error: %v", err)
 	}
@@ -21,7 +21,7 @@ func TestTemplateLoadsAsEmpty(t *testing.T) {
 func TestTemplateUncommentedIsValid(t *testing.T) {
 	// Uncommenting every line must give a valid file with the defaults.
 	var b strings.Builder
-	for line := range strings.Lines(Template()) {
+	for line := range strings.Lines(Template("")) {
 		if strings.HasPrefix(line, "# ") && (strings.Contains(line, " = ") || strings.HasPrefix(line, "# [")) {
 			line = strings.TrimPrefix(line, "# ")
 		}
@@ -41,8 +41,25 @@ func TestTemplateUncommentedIsValid(t *testing.T) {
 	}
 }
 
+func TestTemplateAgent(t *testing.T) {
+	tmpl := Template("pi")
+	if !strings.Contains(tmpl, `default_agent = "pi"`) {
+		t.Errorf("Template(\"pi\") does not set default_agent:\n%s", tmpl)
+	}
+	f, err := Load(writeFile(t, tmpl))
+	if err != nil {
+		t.Fatalf("Load(Template(\"pi\")) error: %v", err)
+	}
+	if f.DefaultAgent != "pi" {
+		t.Errorf("DefaultAgent = %q", f.DefaultAgent)
+	}
+	if strings.Contains(Template(""), `default_agent = "pi"`) {
+		t.Error("Template(\"\") sets values")
+	}
+}
+
 func TestTemplateMentionsEveryKey(t *testing.T) {
-	tmpl := Template()
+	tmpl := Template("")
 	for _, k := range Keys() {
 		k = strings.Replace(k, "agents.*", "agents.opencode", 1)
 		k = strings.Replace(k, "sections.*", "sections.example", 1)
@@ -67,7 +84,7 @@ func TestTemplateMentionsEveryKey(t *testing.T) {
 
 func TestWriteTemplate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "config.toml")
-	if err := WriteTemplate(path); err != nil {
+	if err := WriteTemplate(path, ""); err != nil {
 		t.Fatalf("WriteTemplate error: %v", err)
 	}
 	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
@@ -80,7 +97,7 @@ func TestWriteTemplate(t *testing.T) {
 
 func TestWriteTemplateRefusesOverwrite(t *testing.T) {
 	path := writeFile(t, "# mine\n")
-	err := WriteTemplate(path)
+	err := WriteTemplate(path, "")
 	if err == nil || err.Error() != "configuration file already exists: "+path {
 		t.Errorf("err = %v", err)
 	}

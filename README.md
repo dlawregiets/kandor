@@ -52,7 +52,7 @@ Create a commented configuration file at `~/.config/kandor/config.toml` (or
 `$KANDOR_CONFIG`) with:
 
 ```sh
-kandor --init-config
+kandor --init-config --agent pi   # --agent writes default_agent
 ```
 
 `kandor` consumes its own options (`-C`, `--profile`, `--env`, ...) before

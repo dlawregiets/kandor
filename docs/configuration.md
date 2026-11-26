@@ -6,8 +6,8 @@ Run `kandor --help` for the full list. Common options:
 
 | Option | Meaning |
 | --- | --- |
-| `--init-config` | Create a commented config file and exit |
-| `--init-project` | Create `.kandor.toml` in the project, prompting for sections |
+| `--init-config` | Create a commented config file and exit; `--agent` sets `default_agent` |
+| `--init-project` | Create `.kandor.toml` in the project, prompting for sections; `--agent` sets `default_agent` and the file is added to `.gitignore` |
 | `-C, --dir DIR` | Project directory (default: `$PWD`) |
 | `--ro PATH` | Extra read-only mount (repeatable) |
 | `--rw PATH` | Extra read-write mount (repeatable) |
@@ -145,9 +145,13 @@ credentials, ...) print a `kandor: warning:` naming the file and the keys.
 
 Create a commented starter file with `kandor --init-config` (it uses
 `$KANDOR_CONFIG` when that is set and never overwrites an existing file).
+`--agent NAME` uncomments `default_agent` and sets it, and an unknown agent
+is refused before anything is written.
 `kandor --init-project` (optionally with `-C`) writes a `.kandor.toml`
 starter into the project directory instead, prompting for each stack in the
-user file to include; it also never overwrites.
+user file to include; `--agent` sets the project's `default_agent` there and
+`.kandor.toml` is added to the project's `.gitignore` (created if missing,
+left alone when the entry is already listed). It also never overwrites.
 
 Command-line options override the files. Lists such as mounts and
 environment variables add to the files' lists. When the same path is mounted

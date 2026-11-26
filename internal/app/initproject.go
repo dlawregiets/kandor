@@ -2,9 +2,12 @@ package app
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -24,20 +27,66 @@ const initProjectTemplate = `# Project configuration for kandor. It layers proje
 include = [%s]
 `
 
+// initProjectAgentLine is the commented default_agent line in the template.
+const initProjectAgentLine = `# default_agent = "opencode"  # override the user configuration's agent here`
+
 // initProject writes a .kandor.toml starter into projDir, prompting about
 // each section defined in the user configuration.  Prompts go to stderr so
-// stdout stays clean; an unreadable or EOF stdin answers no.
-func initProject(projDir string, user *config.File, stdin io.Reader, stderr io.Writer) error {
+// stdout stays clean; an unreadable or EOF stdin answers no.  A non-empty
+// agent is written as the uncommented default_agent, and the project file is
+// kept in the project's .gitignore.
+func initProject(projDir string, user *config.File, agent string, stdin io.Reader, stderr io.Writer) error {
 	path := config.ProjectPath(projDir)
 	if _, err := os.Lstat(path); err == nil {
 		return fmt.Errorf("project configuration already exists: %s", path)
 	}
+	if err := addGitignore(projDir, stderr); err != nil {
+		return err
+	}
 	included := promptSections(user.Sections, stdin, stderr)
 	content := fmt.Sprintf(initProjectTemplate, quoteAll(included))
+	if agent != "" {
+		line := fmt.Sprintf("default_agent = %q  # override the user configuration's agent here", agent)
+		content = strings.Replace(content, initProjectAgentLine, line, 1)
+	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("cannot write project configuration: %s", path)
 	}
 	fmt.Fprintf(stderr, "kandor: created %s\n", path)
+	return nil
+}
+
+// addGitignore adds .kandor.toml to the project's .gitignore unless a line
+// already covers it, creating .gitignore when the project has none.  Writing
+// it first keeps a failed --init-project from leaving an unignored file.
+func addGitignore(projDir string, stderr io.Writer) error {
+	path := filepath.Join(projDir, ".gitignore")
+	data, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("cannot read %s", path)
+	}
+	for line := range strings.Lines(string(data)) {
+		entry := strings.TrimSpace(line)
+		if entry == config.ProjectFileName || entry == "/"+config.ProjectFileName {
+			return nil
+		}
+	}
+	add := config.ProjectFileName + "\n"
+	if len(data) > 0 && !strings.HasSuffix(string(data), "\n") {
+		add = "\n" + add
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+	if err != nil {
+		return fmt.Errorf("cannot write %s", path)
+	}
+	_, err = f.WriteString(add)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return fmt.Errorf("cannot write %s", path)
+	}
+	fmt.Fprintf(stderr, "kandor: added %s to %s\n", config.ProjectFileName, path)
 	return nil
 }
 

@@ -70,7 +70,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if homeErr != nil && !explicitDir {
 			return o.fail(homeErr)
 		}
-		if err := config.WriteTemplate(loc.TOML); err != nil {
+		if pre.Agent != "" {
+			known := agent.Known()
+			if !slices.Contains(known, pre.Agent) {
+				return o.fail(fmt.Errorf("unknown agent %q (known: %s)", pre.Agent, strings.Join(known, ", ")))
+			}
+		}
+		if err := config.WriteTemplate(loc.TOML, pre.Agent); err != nil {
 			return o.fail(err)
 		}
 		o.log("created " + loc.TOML)
@@ -173,7 +179,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if err != nil {
 			return o.fail(err)
 		}
-		if err := initProject(dir, file, stdin, stderr); err != nil {
+		if err := initProject(dir, file, req.Agent, stdin, stderr); err != nil {
 			return o.fail(err)
 		}
 		return 0

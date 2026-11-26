@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const template = `# kandor configuration file
@@ -135,12 +136,22 @@ const template = `# kandor configuration file
 # [sections.example.agents.opencode.env.set]
 `
 
-// Template returns a configuration file with every setting commented out.
-func Template() string { return template }
+// defaultAgentTemplateLine is the commented default_agent line in template.
+const defaultAgentTemplateLine = `# default_agent = "opencode"  # the agent to run; --agent and KANDOR_AGENT win,`
 
-// WriteTemplate writes Template() to path.  It never overwrites, so a typo in
-// KANDOR_CONFIG cannot destroy the user's settings.
-func WriteTemplate(path string) error {
+// Template returns a configuration file with every setting commented out.  A
+// non-empty agent is written as the uncommented default_agent.
+func Template(agent string) string {
+	if agent == "" {
+		return template
+	}
+	line := fmt.Sprintf("default_agent = %q  # the agent to run; --agent and KANDOR_AGENT win,", agent)
+	return strings.Replace(template, defaultAgentTemplateLine, line, 1)
+}
+
+// WriteTemplate writes Template(agent) to path.  It never overwrites, so a
+// typo in KANDOR_CONFIG cannot destroy the user's settings.
+func WriteTemplate(path, agent string) error {
 	if _, err := os.Lstat(path); err == nil {
 		return fmt.Errorf("configuration file already exists: %s", path)
 	}
@@ -156,7 +167,7 @@ func WriteTemplate(path string) error {
 	if err != nil {
 		return fmt.Errorf("cannot write configuration file: %s", path)
 	}
-	if _, err := f.WriteString(template); err != nil {
+	if _, err := f.WriteString(Template(agent)); err != nil {
 		f.Close()
 		return fmt.Errorf("cannot write configuration file: %s", path)
 	}

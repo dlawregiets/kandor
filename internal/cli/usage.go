@@ -53,10 +53,12 @@ Options:
       --no-new-session    Keep the controlling terminal (enables TUI resize)
       --shell             Run a shell inside the sandbox instead of an agent
       --init-config       Create a commented config file at the standard path
-                          (or $KANDOR_CONFIG) and exit; never overwrites
+                          (or $KANDOR_CONFIG) and exit; --agent sets
+                          default_agent; never overwrites
       --init-project      Create .kandor.toml in the project directory and
-                          exit; prompts for user-config sections to include;
-                          never overwrites
+                          exit; prompts for user-config sections to include,
+                          adds .kandor.toml to .gitignore and --agent as
+                          default_agent; never overwrites
       --dry-run           Print the planned bwrap command and exit; creates
                           nothing and does not probe user namespaces
                           (environment secrets are redacted)

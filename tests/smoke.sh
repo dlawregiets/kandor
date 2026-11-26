@@ -55,6 +55,14 @@ KANDOR_CONFIG=$init_cfg $kandor --init-config >/dev/null 2>&1
 rc=$?
 check "--init-config does not overwrite an existing file" "[[ $rc -ne 0 ]]"
 
+init_proj=$tmp/init-project
+mkdir -p "$init_proj"
+KANDOR_CONFIG=$init_cfg $kandor -C "$init_proj" --init-project --agent pi >/dev/null 2>&1
+check "--init-project writes default_agent from --agent" \
+  "grep -q '^default_agent = \"pi\"' $init_proj/.kandor.toml"
+check "--init-project adds .kandor.toml to .gitignore" \
+  "grep -qx '.kandor.toml' $init_proj/.gitignore"
+
 dry=$($kandor -C "$tmp/project" --isolated --dry-run 2>/dev/null)
 check "dry-run mounts / read-only" "grep -q -- '--ro-bind / /' <<<\"\$dry\""
 check "dry-run unshares PID" "grep -q -- '--unshare-pid' <<<\"\$dry\""
